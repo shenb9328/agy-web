@@ -1,0 +1,16 @@
+[Unit]
+Description=Antigravity Lightweight Native Web UI
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/agy-web
+ExecStart=/usr/bin/python3 %h/agy-web/server.py
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+Environment=AGY_WEB_PORT=8008
+Environment=AGY_WEB_HOST=0.0.0.0
+
+[Install]
+WantedBy=default.target

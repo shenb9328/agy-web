@@ -1,0 +1,513 @@
+#!/usr/bin/env python3
+"""
+Antigravity Web UI (agy-web) Server - Unified Native Direct Storage Engine
+Directly reads and operates on native Antigravity CLI data:
+- Projects & Conversation Summaries from ~/.gemini/antigravity-cli/conversation_summaries.db
+- Full message transcripts from ~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl
+- Direct execution via /usr/local/bin/agy CLI without any proxy or data synchronization lag.
+"""
+
+import os
+import sys
+import json
+import sqlite3
+import uuid
+import re
+import subprocess
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs, unquote
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+
+PORT = int(os.environ.get("AGY_WEB_PORT", 8008))
+HOST = os.environ.get("AGY_WEB_HOST", "0.0.0.0")
+BASE_DIR = Path(__file__).resolve().parent
+AGY_DIR = Path.home() / ".gemini" / "antigravity-cli"
+SUMMARIES_DB = AGY_DIR / "conversation_summaries.db"
+BRAIN_DIR = AGY_DIR / "brain"
+AGY_BIN = os.environ.get("AGY_BIN") or shutil.which("agy") or "/usr/local/bin/agy"
+
+# Mapping frontend model options to agy CLI official model names
+MODEL_MAP = {
+    "gemini-3.8-flash": "Gemini 3.8 Flash (High)",
+    "gemini-3.8-flash-high": "Gemini 3.8 Flash (High)",
+    "gemini-3.8-flash-medium": "Gemini 3.8 Flash (Medium)",
+    "gemini-3.8-flash-low": "Gemini 3.8 Flash (Low)",
+    "gemini-3.1-pro": "Gemini 3.1 Pro (High)",
+    "gemini-3.1-pro-high": "Gemini 3.1 Pro (High)",
+    "claude-sonnet-4.6": "Claude Sonnet 4.6 (Thinking)",
+    "claude-opus-4.6": "Claude Opus 4.6 (Thinking)",
+    "gpt-oss-120b": "GPT-OSS 120B (Medium)"
+}
+
+def get_summaries_db():
+    conn = sqlite3.connect(str(SUMMARIES_DB), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def parse_transcript_file(session_id):
+    """Parses brain/<session_id>/.system_generated/logs/transcript.jsonl into clean messages."""
+    log_file = BRAIN_DIR / session_id / ".system_generated" / "logs" / "transcript.jsonl"
+    if not log_file.exists():
+        return []
+
+    messages = []
+    try:
+        with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                    msg_type = entry.get("type")
+                    content = entry.get("content", "")
+                    thinking = entry.get("thinking", "")
+                    created_at = entry.get("created_at", "")
+
+                    if msg_type == "USER_INPUT":
+                        # Strip system XML tags like <USER_REQUEST>, <ADDITIONAL_METADATA>, etc.
+                        match = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", content, re.DOTALL)
+                        if match:
+                            clean = match.group(1).strip()
+                        else:
+                            clean = re.sub(r"<[^>]+>", "", content).strip()
+                        messages.append({
+                            "role": "user",
+                            "content": clean if clean else content.strip(),
+                            "thinking": "",
+                            "created_at": created_at
+                        })
+                    elif msg_type == "PLANNER_RESPONSE":
+                        # Only keep messages with actual content or thinking
+                        if content or thinking:
+                            messages.append({
+                                "role": "assistant",
+                                "content": content,
+                                "thinking": thinking,
+                                "created_at": created_at
+                            })
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"[Agy-Web] Error reading transcript for {session_id}: {e}")
+
+    return messages
+
+# ──────────────────────────────────────────────────────────────────────────────
+# HTTP Request Handler
+# ──────────────────────────────────────────────────────────────────────────────
+
+class AgyNativeWebHandler(SimpleHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(BASE_DIR), **kwargs)
+
+    def _send_json(self, data, status=200):
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_json(self):
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            if content_length == 0:
+                return {}
+            raw = self.rfile.read(content_length).decode("utf-8")
+            return json.loads(raw)
+        except Exception:
+            return {}
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/":
+            self.path = "/index.html"
+            return super().do_GET()
+
+        if path == "/api/tree":
+            self.handle_get_native_tree()
+        elif path.startswith("/api/conversations/"):
+            conv_id = path.split("/")[-1]
+            self.handle_get_conversation_messages(conv_id)
+        elif path == "/api/models":
+            self.handle_get_models()
+        elif path == "/api/quota":
+            self.handle_get_quota()
+        else:
+            super().do_GET()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/api/chat/stream":
+            self.handle_native_chat_stream()
+        elif path == "/api/conversations":
+            self.handle_create_conversation()
+        elif path == "/api/projects":
+            self.handle_create_project()
+        else:
+            self._send_json({"error": "Not Found"}, status=404)
+
+    def do_PUT(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path.startswith("/api/conversations/"):
+            conv_id = path.split("/")[-1]
+            self.handle_update_conversation(conv_id)
+        else:
+            self._send_json({"error": "Not Found"}, status=404)
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path.startswith("/api/conversations/"):
+            conv_id = path.split("/")[-1]
+            self.handle_delete_conversation(conv_id)
+        else:
+            self._send_json({"error": "Not Found"}, status=404)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Native Project & Conversation Tree Handler
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def handle_get_native_tree(self):
+        """Reads directly from ~/.gemini/antigravity-cli/conversation_summaries.db"""
+        projects_map = {}
+        conversations = []
+
+        if SUMMARIES_DB.exists():
+            try:
+                conn = get_summaries_db()
+                query = """
+                    SELECT conversation_id, title, preview, step_count, last_modified_time, 
+                           workspace_uris, project_id, status
+                    FROM conversation_summaries 
+                    WHERE killed = 0
+                    ORDER BY last_modified_time DESC
+                """
+                rows = conn.execute(query).fetchall()
+                conn.close()
+
+                for r in rows:
+                    conv_id = r["conversation_id"]
+                    title = r["title"] or "无标题会话"
+                    raw_w = r["workspace_uris"]
+                    raw_p = r["project_id"] or "default-cli-project"
+                    mtime = r["last_modified_time"]
+
+                    # Resolve human-readable project folder name
+                    proj_id = "default"
+                    proj_name = "默认 CLI 工作区"
+                    proj_dir = str(Path.home())
+
+                    if raw_w:
+                        try:
+                            uris = json.loads(raw_w)
+                            if uris and isinstance(uris, list) and uris[0]:
+                                clean_path = unquote(uris[0].replace("file://", "")).rstrip("/")
+                                proj_dir = clean_path
+                                proj_name = clean_path.split("/")[-1] if "/" in clean_path else clean_path
+                                proj_id = f"proj-{proj_name}"
+                        except Exception:
+                            pass
+                    elif raw_p == "outside-of-project":
+                        proj_id = "outside"
+                        proj_name = "独立任务/未归类"
+                        proj_dir = str(Path.home())
+                    elif raw_p != "default-cli-project":
+                        proj_id = raw_p
+                        proj_name = raw_p
+
+                    # Ensure project node exists
+                    if proj_id not in projects_map:
+                        projects_map[proj_id] = {
+                            "id": proj_id,
+                            "name": proj_name,
+                            "path": proj_dir,
+                            "count": 0,
+                            "latest_time": mtime
+                        }
+                    projects_map[proj_id]["count"] += 1
+                    if mtime > projects_map[proj_id].get("latest_time", ""):
+                        projects_map[proj_id]["latest_time"] = mtime
+
+                    conversations.append({
+                        "id": conv_id,
+                        "folder_id": proj_id,
+                        "title": title,
+                        "preview": r["preview"],
+                        "updated_at": mtime
+                    })
+            except Exception as e:
+                print(f"[Agy-Web] Error querying conversation_summaries.db: {e}")
+
+        # Convert projects_map to list and sort strictly by latest_time descending (newest on top!)
+        projects_list = list(projects_map.values())
+        projects_list.sort(key=lambda p: p.get("latest_time", ""), reverse=True)
+
+        self._send_json({
+            "folders": projects_list,
+            "conversations": conversations
+        })
+
+    def handle_get_conversation_messages(self, conv_id):
+        """Reads full message history directly from transcript.jsonl."""
+        messages = parse_transcript_file(conv_id)
+        
+        # Get metadata from conversation_summaries.db
+        title = "会话详情"
+        if SUMMARIES_DB.exists():
+            try:
+                conn = get_summaries_db()
+                row = conn.execute("SELECT title FROM conversation_summaries WHERE conversation_id = ?", (conv_id,)).fetchone()
+                conn.close()
+                if row and row["title"]:
+                    title = row["title"]
+            except Exception:
+                pass
+
+        self._send_json({
+            "conversation": {
+                "id": conv_id,
+                "title": title
+            },
+            "messages": messages
+        })
+
+    def handle_create_project(self):
+        """Creates a new project directory on host under ~/ or scratch/."""
+        data = self._read_json()
+        name = data.get("name", "").strip()
+        if not name:
+            self._send_json({"error": "Project name cannot be empty"}, status=400)
+            return
+
+        proj_path = Path.home() / name
+        try:
+            proj_path.mkdir(parents=True, exist_ok=True)
+            self._send_json({
+                "id": f"proj-{name}",
+                "name": name,
+                "path": str(proj_path)
+            })
+        except Exception as e:
+            self._send_json({"error": str(e)}, status=500)
+
+    def handle_create_conversation(self):
+        """Initializes a placeholder conversation that will be registered upon first message."""
+        data = self._read_json()
+        folder_id = data.get("folder_id", "default")
+        title = data.get("title", "新会话").strip()
+        new_id = str(uuid.uuid4())
+        self._send_json({
+            "id": new_id,
+            "folder_id": folder_id,
+            "title": title,
+            "is_new": True
+        })
+
+    def handle_update_conversation(self, conv_id):
+        data = self._read_json()
+        new_title = data.get("title")
+        new_proj_path = data.get("project_path")
+        if SUMMARIES_DB.exists():
+            try:
+                conn = get_summaries_db()
+                with conn:
+                    if new_title:
+                        conn.execute("UPDATE conversation_summaries SET title = ? WHERE conversation_id = ?", (new_title.strip(), conv_id))
+                    if new_proj_path:
+                        uri = f"file://{new_proj_path}"
+                        conn.execute("UPDATE conversation_summaries SET workspace_uris = ? WHERE conversation_id = ?", (json.dumps([uri]), conv_id))
+                conn.close()
+            except Exception as e:
+                print(f"[Agy-Web] Error updating conversation: {e}")
+        self._send_json({"success": True})
+
+    def handle_delete_conversation(self, conv_id):
+        """Soft-deletes or marks killed in conversation_summaries."""
+        if SUMMARIES_DB.exists():
+            try:
+                conn = get_summaries_db()
+                with conn:
+                    conn.execute("UPDATE conversation_summaries SET killed = 1 WHERE conversation_id = ?", (conv_id,))
+                conn.close()
+            except Exception:
+                pass
+        self._send_json({"success": True})
+
+    def handle_get_models(self):
+        models = [
+            {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash (High)", "desc": "极速响应，百万上下文"},
+            {"id": "gemini-3.8-flash-medium", "name": "Gemini 3.8 Flash (Medium)", "desc": "平衡速度与推理"},
+            {"id": "gemini-3.1-pro", "name": "Gemini 3.1 Pro (High)", "desc": "高阶代码与深度推演"},
+            {"id": "claude-sonnet-4.6", "name": "Claude Sonnet 4.6 (Thinking)", "desc": "思考模式，高品质代码"},
+            {"id": "claude-opus-4.6", "name": "Claude Opus 4.6 (Thinking)", "desc": "超高智力旗舰"},
+            {"id": "gpt-oss-120b", "name": "GPT-OSS 120B (Medium)", "desc": "开源旗舰大模型"}
+        ]
+        self._send_json({"data": models})
+
+    def handle_get_quota(self):
+        self._send_json({
+            "tier": "Antigravity CLI Native Direct",
+            "models": {
+                "Gemini 3.8 Flash": {"remaining_percentage": "100%", "reset_time": "循环自动重置"},
+                "Gemini 3.1 Pro": {"remaining_percentage": "95%", "reset_time": "循环自动重置"},
+                "Claude Sonnet 4.6": {"remaining_percentage": "100%", "reset_time": "独立配额池"}
+            }
+        })
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Direct agy CLI Execution with Streaming
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def handle_native_chat_stream(self):
+        data = self._read_json()
+        conv_id = data.get("conversation_id")
+        user_message = data.get("message", "").strip()
+        requested_model = data.get("model", "gemini-3.8-flash")
+        project_dir = data.get("project_dir")
+
+        if not user_message:
+            self._send_json({"error": "Message cannot be empty"}, status=400)
+            return
+
+        cli_model = MODEL_MAP.get(requested_model, "Gemini 3.8 Flash (High)")
+
+        # Prepare SSE Stream
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        # Check if this conversation already exists in brain
+        existing_session = False
+        if conv_id and (BRAIN_DIR / conv_id).exists():
+            existing_session = True
+
+        # Build agy command
+        cmd = [
+            AGY_BIN,
+            "-p", user_message,
+            "--output-format", "stream-json",
+            "--dangerously-skip-permissions",
+            "--model", cli_model
+        ]
+
+        if existing_session:
+            cmd.extend(["--conversation", conv_id])
+
+        # Execution working directory
+        work_dir = Path.home()
+        if project_dir and Path(project_dir).exists():
+            work_dir = Path(project_dir)
+
+        real_conv_id = conv_id
+        full_content = []
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                cwd=str(work_dir)
+            )
+
+            # Inform frontend init
+            init_evt = json.dumps({"type": "init", "conversation_id": conv_id})
+            self.wfile.write(f"data: {init_evt}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event_data = json.loads(line)
+                    evt_name = event_data.get("event")
+
+                    if evt_name == "init":
+                        assigned_id = event_data.get("conversation_id")
+                        if assigned_id:
+                            real_conv_id = assigned_id
+                    elif evt_name == "step_update":
+                        su = event_data.get("step_update", {})
+                        delta = su.get("text_delta", "")
+                        if delta:
+                            full_content.append(delta)
+                            out_evt = json.dumps({"type": "delta", "content": delta, "thinking": ""})
+                            self.wfile.write(f"data: {out_evt}\n\n".encode("utf-8"))
+                            self.wfile.flush()
+                    elif evt_name == "result":
+                        res_obj = event_data.get("result", {})
+                        if not full_content and res_obj.get("response"):
+                            resp_text = res_obj.get("response")
+                            full_content.append(resp_text)
+                            out_evt = json.dumps({"type": "delta", "content": resp_text, "thinking": ""})
+                            self.wfile.write(f"data: {out_evt}\n\n".encode("utf-8"))
+                            self.wfile.flush()
+                except Exception:
+                    continue
+
+            proc.wait()
+
+            # Ensure new session is bound to the chosen project directory
+            if not existing_session and real_conv_id and SUMMARIES_DB.exists():
+                try:
+                    conn = get_summaries_db()
+                    with conn:
+                        uri = f"file://{work_dir}"
+                        conn.execute("UPDATE conversation_summaries SET workspace_uris = ? WHERE conversation_id = ?",
+                                     (json.dumps([uri]), real_conv_id))
+                    conn.close()
+                except Exception as err:
+                    print(f"[Agy-Web] Error setting workspace uri: {err}")
+        except Exception as e:
+            err_msg = f"\n\n*(调用 agy cli 出错: {str(e)})*"
+            out_evt = json.dumps({"type": "delta", "content": err_msg, "thinking": ""})
+            self.wfile.write(f"data: {out_evt}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+        # Send completion event with actual conversation ID
+        done_evt = json.dumps({"type": "done", "conversation_id": real_conv_id})
+        self.wfile.write(f"data: {done_evt}\n\n".encode("utf-8"))
+        self.wfile.flush()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Main Execution
+# ──────────────────────────────────────────────────────────────────────────────
+
+def main():
+    print(f"🚀 [Agy-Web] Starting Native Direct Storage Web UI on http://{HOST}:{PORT}")
+    print(f"📁 [Agy-Web] Reading summaries DB: {SUMMARIES_DB}")
+    print(f"🧠 [Agy-Web] Reading brain transcripts: {BRAIN_DIR}")
+    print(f"⚡ [Agy-Web] Direct binary: {AGY_BIN}")
+
+    server = ThreadingHTTPServer((HOST, PORT), AgyNativeWebHandler)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n👋 [Agy-Web] Shutting down.")
+        server.server_close()
+
+if __name__ == "__main__":
+    main()

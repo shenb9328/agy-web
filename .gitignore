@@ -1,0 +1,20 @@
+# Database & state files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Python bytecode & environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+
+# Logs & temp
+*.log
+.DS_Store
+.idea/
+.vscode/

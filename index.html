@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Antigravity Web UI</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f5f3ff',
+              100: '#ede9fe',
+              500: '#8b5cf6',
+              600: '#7c3aed',
+              700: '#6d28d9',
+            },
+            dark: {
+              bg: '#0f1117',
+              sidebar: '#161922',
+              card: '#1e2230',
+              border: '#2a2f42',
+              hover: '#262b3d'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- Marked.js & Highlight.js -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/atom-one-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+  <!-- Phosphor Icons -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <style>
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2e344a; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3d4563; }
+
+    /* Markdown prose styles */
+    .prose pre {
+      background-color: #141721 !important;
+      border: 1px solid #2a2f42;
+      border-radius: 0.5rem;
+      padding: 1rem;
+      position: relative;
+      margin-top: 0.75rem;
+      margin-bottom: 0.75rem;
+      overflow-x: auto;
+    }
+    .prose code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.875rem;
+    }
+    .prose :not(pre) > code {
+      background-color: #242938;
+      color: #93c5fd;
+      padding: 0.15rem 0.35rem;
+      border-radius: 0.25rem;
+      border: 1px solid #333a4f;
+    }
+    .prose p { margin-bottom: 0.75rem; line-height: 1.65; }
+    .prose ul, .prose ol { margin-left: 1.25rem; margin-bottom: 0.75rem; }
+    .prose ul { list-style-type: disc; }
+    .prose ol { list-style-type: decimal; }
+    .prose table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+    .prose th, .prose td { border: 1px solid #2a2f42; padding: 0.5rem 0.75rem; text-align: left; }
+    .prose th { background-color: #1a1e2b; }
+    .prose blockquote { border-left: 4px solid #8b5cf6; padding-left: 1rem; color: #9ca3af; margin: 0.75rem 0; }
+
+    .copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      background: #242938;
+      border: 1px solid #3b4259;
+      border-radius: 0.375rem;
+      color: #94a3b8;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .copy-btn:hover { background: #333a4f; color: #f8fafc; }
+    .cursor-blink::after {
+      content: '▋';
+      display: inline-block;
+      vertical-align: baseline;
+      animation: blink 1s step-end infinite;
+      color: #8b5cf6;
+      margin-left: 2px;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+  </style>
+</head>
+<body class="bg-dark-bg text-slate-100 flex h-screen overflow-hidden antialiased">
+
+  <!-- Left Sidebar (Tree View & Navigation) -->
+  <aside id="sidebar" class="w-80 bg-dark-sidebar border-r border-dark-border flex flex-col flex-shrink-0 transition-all duration-300 z-30">
+    <!-- Header -->
+    <div class="p-4 border-b border-dark-border flex items-center justify-between">
+      <div class="flex items-center space-x-2.5">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-brand-600/30">
+          <i class="ph-bold ph-atom text-white text-lg"></i>
+        </div>
+        <div>
+          <h1 class="font-bold text-sm tracking-wide text-slate-100">Antigravity Web</h1>
+          <div class="flex items-center text-[11px] text-emerald-400 space-x-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>CLI 原生直驱 (实时同源)</span>
+          </div>
+        </div>
+      </div>
+      <button id="toggle-sidebar" class="text-slate-400 hover:text-white p-1 rounded hover:bg-dark-hover transition md:hidden">
+        <i class="ph-bold ph-x text-lg"></i>
+      </button>
+    </div>
+
+    <!-- Quick Action Buttons -->
+    <div class="p-3 border-b border-dark-border space-y-2">
+      <div class="flex space-x-2">
+        <button onclick="createNewConversation()" class="flex-1 bg-brand-600 hover:bg-brand-500 text-white px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center space-x-1.5 shadow-md shadow-brand-600/20 transition">
+          <i class="ph-bold ph-chat-circle-plus text-base"></i>
+          <span>新对话</span>
+        </button>
+        <button onclick="promptCreateProject()" class="bg-dark-card hover:bg-dark-hover text-slate-200 border border-dark-border px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center space-x-1 transition" title="创建新项目目录">
+          <i class="ph-bold ph-folder-plus text-base"></i>
+          <span>新项目</span>
+        </button>
+      </div>
+      <!-- Search Filter -->
+      <div class="relative">
+        <i class="ph ph-magnifying-glass absolute left-2.5 top-2.5 text-slate-400 text-xs"></i>
+        <input id="search-input" type="text" placeholder="按名称搜索项目与会话..." oninput="filterTree()"
+               class="w-full bg-dark-bg border border-dark-border rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition">
+      </div>
+    </div>
+
+    <!-- Tree View Scroll Container (Sorted by time descending) -->
+    <div class="flex-1 overflow-y-auto p-3 space-y-2.5" id="tree-container">
+      <div class="text-center text-xs text-slate-500 py-8">正在读取本地项目与会话树...</div>
+    </div>
+
+    <!-- Bottom Quota Status Bar -->
+    <div class="border-t border-dark-border bg-dark-card/50 p-3 flex items-center justify-between text-[11px] text-slate-400">
+      <div class="flex items-center space-x-1.5">
+        <i class="ph-bold ph-clock-counter-clockwise text-emerald-400"></i>
+        <span>按最新时间倒序排列</span>
+      </div>
+      <button onclick="openQuotaModal()" class="text-brand-400 hover:text-brand-300 transition flex items-center space-x-1">
+        <i class="ph-bold ph-gauge"></i>
+        <span>配额</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main Chat Section -->
+  <main class="flex-1 flex flex-col h-full overflow-hidden bg-dark-bg">
+    <!-- Top Header -->
+    <header class="h-14 border-b border-dark-border px-4 flex items-center justify-between flex-shrink-0 bg-dark-sidebar/40 backdrop-blur">
+      <div class="flex items-center space-x-3 min-w-0">
+        <button id="show-sidebar" class="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-dark-hover transition md:hidden flex-shrink-0">
+          <i class="ph-bold ph-list text-xl"></i>
+        </button>
+        <div class="min-w-0">
+          <h2 id="current-chat-title" class="text-sm font-semibold text-slate-100 truncate">
+            Antigravity 对话
+          </h2>
+          <div id="current-folder-breadcrumb" class="text-[11px] text-slate-400 truncate">
+            📁 默认 CLI 工作区
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Controls: Project Selector, Model Selector & Actions -->
+      <div class="flex items-center space-x-2.5 flex-shrink-0">
+        <!-- Project Selector Dropdown -->
+        <div class="flex items-center space-x-1.5 bg-dark-card border border-dark-border px-2.5 py-1 rounded-lg text-xs" title="选择当前对话所属项目">
+          <i class="ph-bold ph-folder text-brand-500"></i>
+          <span class="text-slate-400 text-[11px] hidden sm:inline">项目:</span>
+          <select id="project-select" onchange="changeActiveProject(this.value)" class="bg-transparent text-slate-200 focus:outline-none text-xs cursor-pointer font-medium max-w-[130px] sm:max-w-[160px] truncate">
+            <!-- Dynamically populated from treeData.folders -->
+          </select>
+        </div>
+
+        <!-- Model Selector Dropdown -->
+        <div class="flex items-center space-x-1.5 bg-dark-card border border-dark-border px-2.5 py-1 rounded-lg text-xs" title="切换运行模型">
+          <i class="ph-bold ph-cpu text-brand-500"></i>
+          <select id="model-select" onchange="changeActiveModel(this.value)" class="bg-transparent text-slate-200 focus:outline-none text-xs cursor-pointer">
+            <option value="gemini-3.8-flash">Gemini 3.8 Flash (High)</option>
+            <option value="gemini-3.8-flash-medium">Gemini 3.8 Flash (Medium)</option>
+            <option value="gemini-3.1-pro">Gemini 3.1 Pro (High)</option>
+            <option value="claude-sonnet-4.6">Claude Sonnet 4.6 (Thinking)</option>
+            <option value="claude-opus-4.6">Claude Opus 4.6 (Thinking)</option>
+            <option value="gpt-oss-120b">GPT-OSS 120B (Medium)</option>
+          </select>
+        </div>
+
+        <button onclick="openQuotaModal()" class="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-dark-hover transition" title="查看配额">
+          <i class="ph-bold ph-gauge text-base"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Message Scroll Area -->
+    <div id="chat-scroller" class="flex-1 overflow-y-auto px-4 py-6">
+      <div id="chat-messages" class="max-w-4xl mx-auto space-y-6">
+        <!-- Messages rendered here -->
+      </div>
+    </div>
+
+    <!-- Bottom Input Box -->
+    <footer class="p-4 border-t border-dark-border bg-dark-sidebar/30 backdrop-blur flex-shrink-0">
+      <div class="max-w-4xl mx-auto relative">
+        <div class="bg-dark-card border border-dark-border rounded-xl p-2 shadow-xl focus-within:border-brand-500 transition-colors">
+          <textarea id="chat-input" rows="2" placeholder="输入你的问题或需求... (Enter 发送, Shift+Enter 换行)"
+                    onkeydown="handleKeyDown(event)"
+                    class="w-full bg-transparent text-slate-100 placeholder-slate-500 text-sm focus:outline-none resize-none px-2 py-1 max-h-48"></textarea>
+          <div class="flex items-center justify-between pt-1 px-2 text-xs text-slate-400">
+            <div class="flex items-center space-x-2">
+              <span class="text-[11px] text-slate-500">Enter 发送 / Shift+Enter 换行</span>
+              <span class="text-[11px] text-brand-400" id="input-project-badge"></span>
+            </div>
+            <div class="flex items-center space-x-2">
+              <button id="stop-btn" onclick="stopGenerating()" class="hidden bg-red-600/80 hover:bg-red-500 text-white px-2.5 py-1 rounded-md text-xs font-medium flex items-center space-x-1 transition">
+                <i class="ph-bold ph-stop"></i>
+                <span>停止</span>
+              </button>
+              <button id="send-btn" onclick="sendMessage()" class="bg-brand-600 hover:bg-brand-500 text-white px-3 py-1 rounded-md text-xs font-medium flex items-center space-x-1 shadow-md shadow-brand-600/20 transition">
+                <i class="ph-bold ph-paper-plane-right"></i>
+                <span>发送</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </footer>
+  </main>
+
+  <!-- Quota Modal -->
+  <div id="quota-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-dark-sidebar border border-dark-border w-full max-w-md rounded-xl p-5 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-dark-border pb-3">
+        <div class="flex items-center space-x-2">
+          <i class="ph-bold ph-gauge text-brand-500 text-lg"></i>
+          <h3 class="font-bold text-sm text-slate-100">Antigravity 原生模型状态</h3>
+        </div>
+        <button onclick="closeQuotaModal()" class="text-slate-400 hover:text-white"><i class="ph-bold ph-x text-lg"></i></button>
+      </div>
+      <div id="quota-modal-content" class="space-y-2.5 max-h-80 overflow-y-auto pr-1 text-xs">
+        <div class="p-3 rounded bg-dark-bg border border-dark-border space-y-1">
+          <div class="font-medium text-slate-200">Gemini 3.8 Flash</div>
+          <div class="text-[11px] text-emerald-400 font-bold">100% 可用 (循环自动刷新)</div>
+        </div>
+        <div class="p-3 rounded bg-dark-bg border border-dark-border space-y-1">
+          <div class="font-medium text-slate-200">Gemini 3.1 Pro</div>
+          <div class="text-[11px] text-emerald-400 font-bold">95% 可用 (高阶深度推理)</div>
+        </div>
+        <div class="p-3 rounded bg-dark-bg border border-dark-border space-y-1">
+          <div class="font-medium text-slate-200">Claude Sonnet 4.6</div>
+          <div class="text-[11px] text-emerald-400 font-bold">100% 可用 (独立配额池)</div>
+        </div>
+      </div>
+      <div class="pt-2 border-t border-dark-border flex justify-end">
+        <button onclick="closeQuotaModal()" class="bg-dark-card hover:bg-dark-hover px-4 py-1.5 rounded-lg text-xs font-medium border border-dark-border text-slate-200">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Client-Side JavaScript Logic -->
+  <script>
+    let activeConversationId = null;
+    let activeFolderId = 'default';
+    let currentModel = 'gemini-3.8-flash';
+    let treeData = { folders: [], conversations: [] };
+    let isStreaming = false;
+    let folderCollapseState = {}; // Stores collapsed state per folder
+
+    // Configure marked options
+    marked.setOptions({
+      highlight: function(code, lang) {
+        if (lang && hljs.getLanguage(lang)) {
+          return hljs.highlight(code, { language: lang }).value;
+        }
+        return hljs.highlightAuto(code).value;
+      },
+      breaks: true
+    });
+
+    // On Load
+    window.addEventListener('DOMContentLoaded', async () => {
+      await loadTree(true);
+
+      // Responsive Sidebar Toggle
+      document.getElementById('toggle-sidebar')?.addEventListener('click', () => {
+        document.getElementById('sidebar').classList.add('-translate-x-full');
+      });
+      document.getElementById('show-sidebar')?.addEventListener('click', () => {
+        document.getElementById('sidebar').classList.remove('-translate-x-full');
+      });
+    });
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Tree View & Hierarchy Management
+    // ──────────────────────────────────────────────────────────────────────────
+
+    async function loadTree(autoSelectFirst = false) {
+      try {
+        const res = await fetch('/api/tree');
+        treeData = await res.json();
+
+        // Populate Project Selector in Header
+        updateProjectSelector();
+
+        // Render Tree (Folders and conversations are both sorted by time descending)
+        renderTree(document.getElementById('search-input')?.value || '');
+
+        // Auto select newest conversation on initial load if none selected
+        if (autoSelectFirst && !activeConversationId && treeData.conversations.length > 0) {
+          switchConversation(treeData.conversations[0].id);
+        }
+      } catch (err) {
+        console.error('Failed to load native tree:', err);
+      }
+    }
+
+    function updateProjectSelector() {
+      const select = document.getElementById('project-select');
+      if (!select) return;
+
+      const currentVal = select.value || activeFolderId;
+      select.innerHTML = '';
+
+      treeData.folders.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f.id;
+        opt.innerText = `${f.name} (${f.count})`;
+        select.appendChild(opt);
+      });
+
+      // Restore or set selection
+      if (currentVal && Array.from(select.options).some(o => o.value === currentVal)) {
+        select.value = currentVal;
+      } else if (treeData.folders.length > 0) {
+        select.value = treeData.folders[0].id;
+        activeFolderId = treeData.folders[0].id;
+      }
+      updateBreadcrumb();
+    }
+
+    function changeActiveProject(folderId) {
+      activeFolderId = folderId;
+      const folder = treeData.folders.find(f => f.id === folderId);
+      updateBreadcrumb();
+
+      // If viewing an existing conversation, update its project binding
+      if (activeConversationId) {
+        fetch(`/api/conversations/${activeConversationId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_path: folder ? folder.path : null })
+        }).then(() => loadTree(false));
+      }
+    }
+
+    function updateBreadcrumb() {
+      const folder = treeData.folders.find(f => f.id === activeFolderId);
+      const breadcrumb = document.getElementById('current-folder-breadcrumb');
+      const badge = document.getElementById('input-project-badge');
+      const name = folder ? folder.name : '默认工作区';
+      if (breadcrumb) breadcrumb.innerText = `📁 ${name}`;
+      if (badge) badge.innerText = `[${name}]`;
+    }
+
+    function renderTree(filterQuery = '') {
+      const container = document.getElementById('tree-container');
+      container.innerHTML = '';
+
+      const query = filterQuery.toLowerCase().trim();
+
+      // Folders are already sorted by latest_time descending from server!
+      treeData.folders.forEach((folder, idx) => {
+        // Find conversations belonging to this folder, already sorted by updated_at descending!
+        const folderConvs = treeData.conversations.filter(c => c.folder_id === folder.id);
+        const matchesFolder = folder.name.toLowerCase().includes(query);
+        const matchingConvs = folderConvs.filter(c => c.title.toLowerCase().includes(query));
+
+        if (query && !matchesFolder && matchingConvs.length === 0) return;
+
+        // Default: Expand first 2 active folders, collapse others unless toggled
+        if (folderCollapseState[folder.id] === undefined) {
+          folderCollapseState[folder.id] = (idx < 2) ? false : true;
+        }
+        const isCollapsed = folderCollapseState[folder.id];
+
+        const folderDiv = document.createElement('div');
+        folderDiv.className = 'group rounded-xl bg-dark-card/30 border border-dark-border/50 overflow-hidden transition';
+        folderDiv.innerHTML = `
+          <div class="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-dark-hover/80 cursor-pointer text-slate-300 text-xs select-none">
+            <div class="flex items-center space-x-2 flex-1 min-w-0" onclick="toggleFolderCollapse('${folder.id}')">
+              <i id="arrow-${folder.id}" class="ph-bold ph-caret-down text-[11px] text-slate-500 transition-transform duration-200"
+                 style="transform: ${isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)'}"></i>
+              <i class="ph-bold ph-folder text-brand-500 text-sm"></i>
+              <span class="truncate font-semibold text-slate-200">${escapeHtml(folder.name)}</span>
+              <span class="text-[10px] text-slate-500 bg-dark-bg px-1.5 py-0.5 rounded-full border border-dark-border/40">${folderConvs.length}</span>
+            </div>
+            <div class="flex items-center space-x-1">
+              <button onclick="createNewConversation('${folder.id}')" class="p-1 hover:text-emerald-400 text-slate-400 transition" title="在此项目新建对话">
+                <i class="ph-bold ph-plus text-xs"></i>
+              </button>
+            </div>
+          </div>
+          <div id="children-${folder.id}" class="${isCollapsed ? 'hidden' : ''} px-1.5 pb-1.5 space-y-1"></div>
+        `;
+
+        const childrenContainer = folderDiv.querySelector(`#children-${folder.id}`);
+        const convsToRender = query ? matchingConvs : folderConvs;
+        
+        if (convsToRender.length === 0) {
+          childrenContainer.innerHTML = `<div class="text-[11px] text-slate-500 px-3 py-1 italic">暂无会话，点击右上 + 新建</div>`;
+        } else {
+          convsToRender.forEach(conv => {
+            childrenContainer.appendChild(createConvNode(conv));
+          });
+        }
+
+        container.appendChild(folderDiv);
+      });
+    }
+
+    function createConvNode(conv) {
+      const isActive = conv.id === activeConversationId;
+      const el = document.createElement('div');
+      el.className = `group flex items-center justify-between px-2.5 py-2 rounded-lg text-xs cursor-pointer transition select-none ${
+        isActive ? 'bg-brand-600/20 text-brand-100 border border-brand-500/40 font-medium shadow-sm' : 'text-slate-400 hover:bg-dark-hover hover:text-slate-200'
+      }`;
+
+      // Time formatting (HH:MM or MM-DD)
+      let timeStr = '';
+      if (conv.updated_at) {
+        try {
+          const d = new Date(conv.updated_at);
+          timeStr = `${(d.getMonth()+1).toString().padStart(2,'0')}-${d.getDate().toString().padStart(2,'0')}`;
+        } catch(e) {}
+      }
+
+      el.innerHTML = `
+        <div class="flex items-center space-x-2 flex-1 min-w-0" onclick="switchConversation('${conv.id}')">
+          <i class="ph-bold ph-chat-circle text-xs ${isActive ? 'text-brand-400' : 'text-slate-500'}"></i>
+          <span class="truncate">${escapeHtml(conv.title)}</span>
+        </div>
+        <div class="flex items-center space-x-1 flex-shrink-0">
+          <span class="text-[10px] text-slate-500 group-hover:hidden font-mono">${timeStr}</span>
+          <div class="hidden group-hover:flex items-center space-x-1">
+            <button onclick="promptRenameConversation('${conv.id}', '${escapeHtml(conv.title)}')" class="p-1 hover:text-white text-slate-400 transition" title="重命名会话">
+              <i class="ph-bold ph-pencil-simple text-xs"></i>
+            </button>
+            <button onclick="deleteConversation('${conv.id}')" class="p-1 hover:text-red-400 text-slate-400 transition" title="删除会话">
+              <i class="ph-bold ph-trash text-xs"></i>
+            </button>
+          </div>
+        </div>
+      `;
+      return el;
+    }
+
+    function toggleFolderCollapse(folderId) {
+      const children = document.getElementById(`children-${folderId}`);
+      const arrow = document.getElementById(`arrow-${folderId}`);
+      const isCurrentlyHidden = children.classList.contains('hidden');
+
+      if (isCurrentlyHidden) {
+        children.classList.remove('hidden');
+        arrow.style.transform = 'rotate(0deg)';
+        folderCollapseState[folderId] = false;
+      } else {
+        children.classList.add('hidden');
+        arrow.style.transform = 'rotate(-90deg)';
+        folderCollapseState[folderId] = true;
+      }
+    }
+
+    function filterTree() {
+      const q = document.getElementById('search-input').value;
+      renderTree(q);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Actions & Conversational Flow
+    // ──────────────────────────────────────────────────────────────────────────
+
+    async function promptCreateProject() {
+      const name = prompt('请输入新项目名称（将在宿主机 ~/ 下创建同名目录）:');
+      if (!name || !name.trim()) return;
+      try {
+        const res = await fetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim() })
+        });
+        const data = await res.json();
+        if (data.id) {
+          activeFolderId = data.id;
+          await loadTree();
+          createNewConversation(data.id);
+        }
+      } catch (err) {
+        alert('创建项目失败: ' + err.message);
+      }
+    }
+
+    function createNewConversation(folderId = null) {
+      if (folderId) {
+        activeFolderId = folderId;
+      }
+      activeConversationId = null;
+
+      // Update Project Selector
+      const select = document.getElementById('project-select');
+      if (select && activeFolderId) {
+        select.value = activeFolderId;
+      }
+      updateBreadcrumb();
+
+      // UI state
+      document.getElementById('current-chat-title').innerText = '新对话 (输入即发起)';
+      renderTree(document.getElementById('search-input')?.value || '');
+
+      const folder = treeData.folders.find(f => f.id === activeFolderId);
+      const folderName = folder ? folder.name : '默认工作区';
+
+      // Welcome Banner with clear project selection indicator
+      const container = document.getElementById('chat-messages');
+      container.innerHTML = `
+        <div class="text-center py-16 space-y-4 max-w-lg mx-auto">
+          <div class="w-14 h-14 rounded-2xl bg-gradient-to-tr from-brand-600/30 to-indigo-600/20 text-brand-400 mx-auto flex items-center justify-center text-3xl border border-brand-500/30 shadow-xl">
+            <i class="ph-bold ph-atom"></i>
+          </div>
+          <h3 class="text-lg font-bold text-slate-100">发起新会话</h3>
+          <div class="p-3.5 rounded-xl bg-dark-card border border-dark-border text-xs text-slate-300 space-y-2 text-left">
+            <div class="flex items-center justify-between">
+              <span class="text-slate-400">当前归属项目：</span>
+              <span class="font-semibold text-brand-400 flex items-center space-x-1">
+                <i class="ph-bold ph-folder"></i>
+                <span>${escapeHtml(folderName)}</span>
+              </span>
+            </div>
+            <div class="text-[11px] text-slate-500">
+              💡 提示：如需归属到其他项目，可随时在<strong>右上角项目下拉框</strong>中直接切换。发送后该对话将直接保存至对应项目目录下。
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Focus input
+      document.getElementById('chat-input').focus();
+    }
+
+    async function switchConversation(id) {
+      activeConversationId = id;
+      renderTree(document.getElementById('search-input')?.value || '');
+
+      const conv = treeData.conversations.find(c => c.id === id);
+      if (conv) {
+        document.getElementById('current-chat-title').innerText = conv.title;
+        activeFolderId = conv.folder_id || 'default';
+        const select = document.getElementById('project-select');
+        if (select) select.value = activeFolderId;
+        updateBreadcrumb();
+      }
+
+      // Load Messages directly from transcript.jsonl
+      try {
+        const res = await fetch(`/api/conversations/${id}`);
+        const data = await res.json();
+        renderMessages(data.messages || []);
+      } catch (err) {
+        console.error('Failed to load conversation messages:', err);
+      }
+    }
+
+    async function promptRenameConversation(id, current) {
+      const name = prompt('重命名会话:', current);
+      if (!name || !name.trim() || name === current) return;
+      await fetch(`/api/conversations/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: name.trim() })
+      });
+      await loadTree(false);
+      if (id === activeConversationId) {
+        document.getElementById('current-chat-title').innerText = name.trim();
+      }
+    }
+
+    async function deleteConversation(id) {
+      if (!confirm('确定从会话列表中移除该会话吗？')) return;
+      await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+      if (activeConversationId === id) {
+        activeConversationId = null;
+      }
+      await loadTree(false);
+      if (!activeConversationId && treeData.conversations.length > 0) {
+        switchConversation(treeData.conversations[0].id);
+      } else if (!activeConversationId) {
+        createNewConversation();
+      }
+    }
+
+    function changeActiveModel(model) {
+      currentModel = model;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Message Rendering & Streaming
+    // ──────────────────────────────────────────────────────────────────────────
+
+    function renderMessages(messages) {
+      const container = document.getElementById('chat-messages');
+      container.innerHTML = '';
+
+      if (messages.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-16 space-y-3">
+            <h3 class="text-base font-semibold text-slate-300">暂无历史消息</h3>
+            <p class="text-xs text-slate-500">在下方输入框直接提问即可开始。</p>
+          </div>
+        `;
+        return;
+      }
+
+      messages.forEach(msg => {
+        appendMessageElement(msg.role, msg.content, msg.thinking, false);
+      });
+      scrollToBottom();
+    }
+
+    function appendMessageElement(role, content, thinking = '', isLive = false) {
+      const container = document.getElementById('chat-messages');
+      const isUser = role === 'user';
+
+      const msgDiv = document.createElement('div');
+      msgDiv.className = `flex space-x-3 text-sm ${isUser ? 'justify-end' : 'justify-start'}`;
+
+      if (isUser) {
+        msgDiv.innerHTML = `
+          <div class="max-w-2xl bg-brand-600/90 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 shadow-md shadow-brand-600/10">
+            <div class="whitespace-pre-wrap leading-relaxed">${escapeHtml(content)}</div>
+          </div>
+          <div class="w-8 h-8 rounded-lg bg-slate-700 flex items-center justify-center text-slate-300 flex-shrink-0 text-xs font-bold">
+            我
+          </div>
+        `;
+      } else {
+        const thinkingHtml = thinking ? `
+          <details class="mb-3 bg-dark-bg/60 border border-dark-border/80 rounded-lg p-2.5 text-xs text-slate-400">
+            <summary class="cursor-pointer font-medium text-slate-400 flex items-center space-x-1.5 select-none hover:text-slate-300">
+              <i class="ph-bold ph-brain text-brand-400"></i>
+              <span>思考过程 (Reasoning)</span>
+            </summary>
+            <div class="mt-2 text-slate-400 whitespace-pre-wrap font-mono text-[11px] leading-relaxed border-t border-dark-border/40 pt-2">${escapeHtml(thinking)}</div>
+          </details>
+        ` : '';
+
+        const renderedContent = marked.parse(content || '');
+
+        msgDiv.innerHTML = `
+          <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white flex-shrink-0 shadow-md shadow-brand-600/20">
+            <i class="ph-bold ph-atom text-base"></i>
+          </div>
+          <div class="max-w-3xl flex-1 bg-dark-card border border-dark-border/60 rounded-2xl rounded-tl-sm px-5 py-4 shadow-lg overflow-hidden">
+            ${thinkingHtml}
+            <div class="prose text-slate-200 leading-relaxed text-sm ${isLive ? 'cursor-blink' : ''}" id="asst-body">
+              ${renderedContent}
+            </div>
+          </div>
+        `;
+
+        msgDiv.querySelectorAll('pre').forEach(pre => {
+          const btn = document.createElement('button');
+          btn.className = 'copy-btn';
+          btn.innerText = '复制';
+          btn.onclick = () => {
+            const code = pre.querySelector('code')?.innerText || pre.innerText;
+            navigator.clipboard.writeText(code);
+            btn.innerText = '已复制!';
+            setTimeout(() => btn.innerText = '复制', 2000);
+          };
+          pre.appendChild(btn);
+        });
+      }
+
+      container.appendChild(msgDiv);
+      return msgDiv;
+    }
+
+    async function sendMessage() {
+      if (isStreaming) return;
+      const input = document.getElementById('chat-input');
+      const text = input.value.trim();
+      if (!text) return;
+
+      input.value = '';
+      input.style.height = 'auto';
+
+      // If in empty welcome banner, clear it first
+      if (!activeConversationId) {
+        document.getElementById('chat-messages').innerHTML = '';
+      }
+
+      // Render user message immediately
+      appendMessageElement('user', text);
+      scrollToBottom();
+
+      // Setup Live Assistant element
+      const asstDiv = appendMessageElement('assistant', '', '', true);
+      const asstBody = asstDiv.querySelector('#asst-body');
+      scrollToBottom();
+
+      isStreaming = true;
+      document.getElementById('send-btn').classList.add('hidden');
+      document.getElementById('stop-btn').classList.remove('hidden');
+
+      let fullContent = '';
+
+      try {
+        const folder = treeData.folders.find(f => f.id === activeFolderId);
+        const response = await fetch('/api/chat/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            conversation_id: activeConversationId,
+            message: text,
+            model: currentModel,
+            project_dir: folder ? folder.path : null
+          })
+        });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunkText = decoder.decode(value, { stream: true });
+          const lines = chunkText.split('\n');
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const raw = line.slice(6).trim();
+              try {
+                const evt = JSON.parse(raw);
+                if (evt.type === 'delta') {
+                  if (evt.content) {
+                    fullContent += evt.content;
+                    asstBody.innerHTML = marked.parse(fullContent);
+                    asstDiv.querySelectorAll('pre:not(:has(.copy-btn))').forEach(pre => {
+                      const btn = document.createElement('button');
+                      btn.className = 'copy-btn';
+                      btn.innerText = '复制';
+                      btn.onclick = () => {
+                        const code = pre.querySelector('code')?.innerText || pre.innerText;
+                        navigator.clipboard.writeText(code);
+                        btn.innerText = '已复制!';
+                        setTimeout(() => btn.innerText = '复制', 2000);
+                      };
+                      pre.appendChild(btn);
+                    });
+                    scrollToBottom();
+                  }
+                } else if (evt.type === 'done') {
+                  asstBody.classList.remove('cursor-blink');
+                  if (evt.conversation_id) {
+                    activeConversationId = evt.conversation_id;
+                  }
+                  // Reload tree so new conversation instantly floats to top of folder
+                  await loadTree(false);
+                }
+              } catch (e) {}
+            }
+          }
+        }
+      } catch (err) {
+        asstBody.innerHTML += `<p class="text-red-400 text-xs mt-2">*(连接中断: ${err.message})*</p>`;
+      } finally {
+        isStreaming = false;
+        asstBody.classList.remove('cursor-blink');
+        document.getElementById('send-btn').classList.remove('hidden');
+        document.getElementById('stop-btn').classList.add('hidden');
+      }
+    }
+
+    function stopGenerating() {
+      location.reload();
+    }
+
+    function handleKeyDown(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    }
+
+    function scrollToBottom() {
+      const scroller = document.getElementById('chat-scroller');
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+
+    function openQuotaModal() {
+      document.getElementById('quota-modal').classList.remove('hidden');
+    }
+    function closeQuotaModal() {
+      document.getElementById('quota-modal').classList.add('hidden');
+    }
+
+    function escapeHtml(text) {
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+      return text ? String(text).replace(/[&<>"']/g, m => map[m]) : '';
+    }
+  </script>
+</body>
+</html>
