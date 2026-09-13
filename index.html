@@ -2,7 +2,7 @@
 <html lang="zh-CN" class="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Antigravity Web UI</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -35,11 +35,18 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/atom-one-dark.min.css">
   <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
-  <!-- Phosphor Icons -->
-  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  
   <style>
+    /* Mobile-first dynamic viewport height */
+    html, body {
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      background-color: #0f1117;
+    }
+
     /* Custom Scrollbar */
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #2e344a; border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: #3d4563; }
@@ -49,15 +56,15 @@
       background-color: #141721 !important;
       border: 1px solid #2a2f42;
       border-radius: 0.5rem;
-      padding: 1rem;
+      padding: 0.85rem;
       position: relative;
-      margin-top: 0.75rem;
-      margin-bottom: 0.75rem;
+      margin-top: 0.5rem;
+      margin-bottom: 0.5rem;
       overflow-x: auto;
     }
     .prose code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.875rem;
+      font-size: 0.825rem;
     }
     .prose :not(pre) > code {
       background-color: #242938;
@@ -66,24 +73,24 @@
       border-radius: 0.25rem;
       border: 1px solid #333a4f;
     }
-    .prose p { margin-bottom: 0.75rem; line-height: 1.65; }
-    .prose ul, .prose ol { margin-left: 1.25rem; margin-bottom: 0.75rem; }
+    .prose p { margin-bottom: 0.65rem; line-height: 1.6; }
+    .prose ul, .prose ol { margin-left: 1.15rem; margin-bottom: 0.65rem; }
     .prose ul { list-style-type: disc; }
     .prose ol { list-style-type: decimal; }
-    .prose table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
-    .prose th, .prose td { border: 1px solid #2a2f42; padding: 0.5rem 0.75rem; text-align: left; }
+    .prose table { width: 100%; border-collapse: collapse; margin-bottom: 0.75rem; font-size: 0.825rem; }
+    .prose th, .prose td { border: 1px solid #2a2f42; padding: 0.4rem 0.6rem; text-align: left; }
     .prose th { background-color: #1a1e2b; }
-    .prose blockquote { border-left: 4px solid #8b5cf6; padding-left: 1rem; color: #9ca3af; margin: 0.75rem 0; }
+    .prose blockquote { border-left: 3px solid #8b5cf6; padding-left: 0.75rem; color: #9ca3af; margin: 0.5rem 0; }
 
     .copy-btn {
       position: absolute;
-      top: 0.5rem;
-      right: 0.5rem;
-      padding: 0.25rem 0.5rem;
-      font-size: 0.75rem;
+      top: 0.4rem;
+      right: 0.4rem;
+      padding: 0.2rem 0.45rem;
+      font-size: 0.7rem;
       background: #242938;
       border: 1px solid #3b4259;
-      border-radius: 0.375rem;
+      border-radius: 0.35rem;
       color: #94a3b8;
       cursor: pointer;
       transition: all 0.2s;
@@ -100,149 +107,156 @@
     @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
   </style>
 </head>
-<body class="bg-dark-bg text-slate-100 flex h-screen overflow-hidden antialiased">
+<body class="text-slate-100 flex h-full w-full overflow-hidden antialiased select-none">
 
-  <!-- Left Sidebar (Tree View & Navigation) -->
-  <aside id="sidebar" class="w-80 bg-dark-sidebar border-r border-dark-border flex flex-col flex-shrink-0 transition-all duration-300 z-30">
-    <!-- Header -->
-    <div class="p-4 border-b border-dark-border flex items-center justify-between">
-      <div class="flex items-center space-x-2.5">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-brand-600/30">
-          <i class="ph-bold ph-atom text-white text-lg"></i>
+  <!-- Mobile Sidebar Backdrop Overlay -->
+  <div id="sidebar-overlay" onclick="closeSidebar()"
+       class="hidden fixed inset-0 bg-black/70 backdrop-blur-xs z-40 lg:hidden transition-opacity duration-300"></div>
+
+  <!-- Left Sidebar (Drawer on mobile/foldables, Static on large screens) -->
+  <aside id="sidebar"
+         class="fixed inset-y-0 left-0 z-50 w-72 sm:w-80 bg-dark-sidebar border-r border-dark-border flex flex-col flex-shrink-0 transition-transform duration-300 ease-in-out transform -translate-x-full lg:translate-x-0 lg:static shadow-2xl lg:shadow-none">
+    
+    <!-- Sidebar Header -->
+    <div class="p-3.5 border-b border-dark-border flex items-center justify-between flex-shrink-0">
+      <div class="flex items-center space-x-2.5 min-w-0">
+        <div class="w-7 h-7 rounded-lg bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-brand-600/30 flex-shrink-0">
+          <svg class="w-4 h-4 text-white fill-current" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 14.93V18a1 1 0 0 1-2 0v-1.07A7 7 0 0 1 5.07 11H6a1 1 0 0 1 0-2h-.93A7 7 0 0 1 11 5.07V6a1 1 0 0 1 2 0v-.93A7 7 0 0 1 18.93 11H18a1 1 0 0 1 0 2h.93A7 7 0 0 1 13 16.93z"/></svg>
         </div>
-        <div>
-          <h1 class="font-bold text-sm tracking-wide text-slate-100">Antigravity Web</h1>
-          <div class="flex items-center text-[11px] text-emerald-400 space-x-1">
+        <div class="min-w-0">
+          <h1 class="font-bold text-xs tracking-wide text-slate-100 truncate">Antigravity Web</h1>
+          <div class="flex items-center text-[10px] text-emerald-400 space-x-1">
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span id="active-user-badge">环境就绪</span>
+            <span id="active-user-badge" class="truncate">环境就绪</span>
           </div>
         </div>
       </div>
-      <button id="toggle-sidebar" class="text-slate-400 hover:text-white p-1 rounded hover:bg-dark-hover transition md:hidden">
-        <i class="ph-bold ph-x text-lg"></i>
+      <!-- Close drawer button on mobile -->
+      <button onclick="closeSidebar()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-dark-hover transition lg:hidden" title="关闭侧边栏">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
     </div>
 
     <!-- Quick Action Buttons -->
-    <div class="p-3 border-b border-dark-border space-y-2">
-      <div class="flex space-x-2">
-        <button onclick="createNewConversation()" class="flex-1 bg-brand-600 hover:bg-brand-500 text-white px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center space-x-1.5 shadow-md shadow-brand-600/20 transition">
-          <i class="ph-bold ph-chat-circle-plus text-base"></i>
+    <div class="p-2.5 border-b border-dark-border space-y-2 flex-shrink-0">
+      <div class="flex space-x-1.5">
+        <button onclick="createNewConversation(); closeSidebarOnMobile();" class="flex-1 bg-brand-600 hover:bg-brand-500 text-white px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-center space-x-1 shadow-md shadow-brand-600/20 transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
           <span>新对话</span>
         </button>
-        <button onclick="promptCreateProject()" class="bg-dark-card hover:bg-dark-hover text-slate-200 border border-dark-border px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center space-x-1 transition" title="创建新项目目录">
-          <i class="ph-bold ph-folder-plus text-base"></i>
+        <button onclick="promptCreateProject()" class="bg-dark-card hover:bg-dark-hover text-slate-200 border border-dark-border px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-center space-x-1 transition" title="创建新项目目录">
+          <svg class="w-3.5 h-3.5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
           <span>新项目</span>
         </button>
       </div>
       <!-- Search Filter -->
       <div class="relative">
-        <i class="ph ph-magnifying-glass absolute left-2.5 top-2.5 text-slate-400 text-xs"></i>
-        <input id="search-input" type="text" placeholder="按名称搜索项目与会话..." oninput="filterTree()"
-               class="w-full bg-dark-bg border border-dark-border rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition">
+        <span class="absolute left-2.5 top-2 text-slate-400 text-xs">🔍</span>
+        <input id="search-input" type="text" placeholder="搜索项目或会话..." oninput="filterTree()"
+               class="w-full bg-dark-bg border border-dark-border rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition">
       </div>
     </div>
 
     <!-- Tree View Scroll Container (Sorted by time descending) -->
-    <div class="flex-1 overflow-y-auto p-3 space-y-2.5" id="tree-container">
+    <div class="flex-1 overflow-y-auto p-2.5 space-y-2" id="tree-container">
       <div class="text-center text-xs text-slate-500 py-8">正在读取本地项目与会话树...</div>
     </div>
 
     <!-- Bottom Status Bar -->
-    <div class="border-t border-dark-border bg-dark-card/50 p-3 flex items-center justify-between text-[11px] text-slate-400">
-      <div class="flex items-center space-x-1.5">
-        <i class="ph-bold ph-clock-counter-clockwise text-emerald-400"></i>
-        <span>按最新时间倒序</span>
+    <div class="border-t border-dark-border bg-dark-card/50 p-2.5 flex items-center justify-between text-[11px] text-slate-400 flex-shrink-0">
+      <div class="flex items-center space-x-1">
+        <span>⏱️</span>
+        <span>按最新时间排序</span>
       </div>
       <button onclick="openQuotaModal()" class="text-brand-400 hover:text-brand-300 transition flex items-center space-x-1">
-        <i class="ph-bold ph-gauge"></i>
-        <span>配额</span>
+        <span>配额详情</span>
       </button>
     </div>
   </aside>
 
-  <!-- Main Chat Section -->
-  <main class="flex-1 flex flex-col h-full overflow-hidden bg-dark-bg">
-    <!-- Top Header -->
-    <header class="h-14 border-b border-dark-border px-4 flex items-center justify-between flex-shrink-0 bg-dark-sidebar/40 backdrop-blur">
-      <div class="flex items-center space-x-3 min-w-0">
-        <button id="show-sidebar" class="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-dark-hover transition md:hidden flex-shrink-0">
-          <i class="ph-bold ph-list text-xl"></i>
+  <!-- Main Chat Section (Takes full width on mobile/foldable) -->
+  <main class="flex-1 flex flex-col w-full h-full min-w-0 overflow-hidden bg-dark-bg">
+    
+    <!-- Top Header (Clean, responsive, never overflows) -->
+    <header class="h-12 sm:h-14 border-b border-dark-border px-3 sm:px-4 flex items-center justify-between flex-shrink-0 bg-dark-sidebar/50 backdrop-blur z-10">
+      
+      <!-- Left: Menu Button & Title -->
+      <div class="flex items-center space-x-2 min-w-0 flex-1 mr-2">
+        <button id="show-sidebar" onclick="openSidebar()"
+                class="text-slate-300 hover:text-white p-1.5 -ml-1 rounded-lg hover:bg-dark-hover transition lg:hidden flex-shrink-0"
+                title="打开侧边栏">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
-        <div class="min-w-0">
-          <h2 id="current-chat-title" class="text-sm font-semibold text-slate-100 truncate">
+        <div class="min-w-0 flex-1">
+          <h2 id="current-chat-title" class="text-xs sm:text-sm font-semibold text-slate-100 truncate">
             Antigravity 对话
           </h2>
-          <div id="current-folder-breadcrumb" class="text-[11px] text-slate-400 truncate">
+          <div id="current-folder-breadcrumb" class="text-[10px] sm:text-[11px] text-slate-400 truncate">
             📁 默认工作区
           </div>
         </div>
       </div>
 
-      <!-- Right Controls: Project Selector, Model Selector, User Info & Logout -->
-      <div class="flex items-center space-x-2.5 flex-shrink-0">
+      <!-- Right: Responsive Controls -->
+      <div class="flex items-center space-x-1.5 sm:space-x-2 flex-shrink-0">
+        
         <!-- Project Selector Dropdown -->
-        <div class="flex items-center space-x-1.5 bg-dark-card border border-dark-border px-2.5 py-1 rounded-lg text-xs" title="选择当前对话所属项目">
-          <i class="ph-bold ph-folder text-brand-500"></i>
-          <span class="text-slate-400 text-[11px] hidden sm:inline">项目:</span>
-          <select id="project-select" onchange="changeActiveProject(this.value)" class="bg-transparent text-slate-200 focus:outline-none text-xs cursor-pointer font-medium max-w-[120px] sm:max-w-[150px] truncate">
-            <!-- Populated from treeData.folders -->
+        <div class="flex items-center bg-dark-card border border-dark-border rounded-lg px-2 py-1 text-xs" title="切换当前对话所属项目">
+          <span class="mr-1 text-xs">📁</span>
+          <select id="project-select" onchange="changeActiveProject(this.value)"
+                  class="bg-transparent text-slate-200 focus:outline-none text-[11px] sm:text-xs cursor-pointer font-medium max-w-[90px] sm:max-w-[140px] truncate">
+            <!-- Dynamically populated -->
           </select>
         </div>
 
         <!-- Model Selector Dropdown -->
-        <div class="flex items-center space-x-1.5 bg-dark-card border border-dark-border px-2.5 py-1 rounded-lg text-xs" title="切换运行模型">
-          <i class="ph-bold ph-cpu text-brand-500"></i>
-          <select id="model-select" onchange="changeActiveModel(this.value)" class="bg-transparent text-slate-200 focus:outline-none text-xs cursor-pointer">
-            <option value="gemini-3.8-flash">Gemini 3.8 Flash (High)</option>
-            <option value="gemini-3.8-flash-medium">Gemini 3.8 Flash (Medium)</option>
-            <option value="gemini-3.1-pro">Gemini 3.1 Pro (High)</option>
-            <option value="claude-sonnet-4.6">Claude Sonnet 4.6 (Thinking)</option>
-            <option value="claude-opus-4.6">Claude Opus 4.6 (Thinking)</option>
-            <option value="gpt-oss-120b">GPT-OSS 120B (Medium)</option>
+        <div class="flex items-center bg-dark-card border border-dark-border rounded-lg px-2 py-1 text-xs" title="选择运行模型">
+          <select id="model-select" onchange="changeActiveModel(this.value)"
+                  class="bg-transparent text-slate-200 focus:outline-none text-[11px] sm:text-xs cursor-pointer font-medium max-w-[85px] sm:max-w-[130px] truncate">
+            <option value="gemini-3.8-flash">Flash 3.8</option>
+            <option value="gemini-3.1-pro">Pro 3.1</option>
+            <option value="claude-sonnet-4.6">Claude 4.6</option>
+            <option value="claude-opus-4.6">Opus 4.6</option>
+            <option value="gpt-oss-120b">GPT-OSS</option>
           </select>
         </div>
 
-        <!-- User Profile Pill -->
-        <div class="hidden sm:flex items-center space-x-1.5 bg-dark-card border border-dark-border px-2.5 py-1 rounded-lg text-xs text-slate-300">
-          <i class="ph-bold ph-user-circle text-brand-400 text-sm"></i>
-          <span id="user-display-name" class="font-medium">账户</span>
+        <!-- User Profile Indicator / Logout -->
+        <div class="flex items-center space-x-1 bg-dark-card border border-dark-border rounded-lg p-1 text-xs text-slate-300">
+          <span id="user-display-name" class="font-medium hidden md:inline px-1 text-[11px]">账户</span>
+          <button onclick="handleLogout()" class="text-slate-400 hover:text-red-400 p-0.5 rounded transition" title="退出登录">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+          </button>
         </div>
 
-        <!-- Logout Button -->
-        <button onclick="handleLogout()" class="p-1.5 text-slate-400 hover:text-red-400 rounded-lg hover:bg-dark-hover transition" title="退出登录">
-          <i class="ph-bold ph-sign-out text-base"></i>
-        </button>
       </div>
     </header>
 
     <!-- Message Scroll Area -->
-    <div id="chat-scroller" class="flex-1 overflow-y-auto px-4 py-6">
-      <div id="chat-messages" class="max-w-4xl mx-auto space-y-6">
+    <div id="chat-scroller" class="flex-1 overflow-y-auto px-2.5 sm:px-4 py-4 space-y-4">
+      <div id="chat-messages" class="max-w-4xl mx-auto space-y-4">
         <!-- Messages rendered here -->
       </div>
     </div>
 
     <!-- Bottom Input Box -->
-    <footer class="p-4 border-t border-dark-border bg-dark-sidebar/30 backdrop-blur flex-shrink-0">
+    <footer class="p-2.5 sm:p-4 border-t border-dark-border bg-dark-sidebar/40 backdrop-blur flex-shrink-0">
       <div class="max-w-4xl mx-auto relative">
-        <div class="bg-dark-card border border-dark-border rounded-xl p-2 shadow-xl focus-within:border-brand-500 transition-colors">
-          <textarea id="chat-input" rows="2" placeholder="输入你的问题或需求... (Enter 发送, Shift+Enter 换行)"
+        <div class="bg-dark-card border border-dark-border rounded-xl p-2 shadow-lg focus-within:border-brand-500 transition-colors">
+          <textarea id="chat-input" rows="2" placeholder="输入问题或任务需求... (Enter 发送)"
                     onkeydown="handleKeyDown(event)"
-                    class="w-full bg-transparent text-slate-100 placeholder-slate-500 text-sm focus:outline-none resize-none px-2 py-1 max-h-48"></textarea>
-          <div class="flex items-center justify-between pt-1 px-2 text-xs text-slate-400">
-            <div class="flex items-center space-x-2">
-              <span class="text-[11px] text-slate-500">Enter 发送 / Shift+Enter 换行</span>
-              <span class="text-[11px] text-brand-400" id="input-project-badge"></span>
+                    class="w-full bg-transparent text-slate-100 placeholder-slate-500 text-xs sm:text-sm focus:outline-none resize-none px-1 py-1 max-h-36"></textarea>
+          <div class="flex items-center justify-between pt-1 px-1 text-[11px] text-slate-400">
+            <div class="flex items-center space-x-1.5 truncate">
+              <span class="text-brand-400 truncate" id="input-project-badge"></span>
             </div>
-            <div class="flex items-center space-x-2">
-              <button id="stop-btn" onclick="stopGenerating()" class="hidden bg-red-600/80 hover:bg-red-500 text-white px-2.5 py-1 rounded-md text-xs font-medium flex items-center space-x-1 transition">
-                <i class="ph-bold ph-stop"></i>
+            <div class="flex items-center space-x-1.5 flex-shrink-0">
+              <button id="stop-btn" onclick="stopGenerating()" class="hidden bg-red-600/80 hover:bg-red-500 text-white px-2 py-1 rounded-md text-xs font-medium transition">
                 <span>停止</span>
               </button>
               <button id="send-btn" onclick="sendMessage()" class="bg-brand-600 hover:bg-brand-500 text-white px-3 py-1 rounded-md text-xs font-medium flex items-center space-x-1 shadow-md shadow-brand-600/20 transition">
-                <i class="ph-bold ph-paper-plane-right"></i>
                 <span>发送</span>
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
               </button>
             </div>
           </div>
@@ -252,33 +266,27 @@
   </main>
 
   <!-- Login Modal Overlay (Shown when unauthenticated) -->
-  <div id="login-modal" class="fixed inset-0 bg-dark-bg/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
-    <div class="bg-dark-sidebar border border-dark-border w-full max-w-sm rounded-2xl p-6 shadow-2xl space-y-5">
-      <div class="text-center space-y-2">
-        <div class="w-12 h-12 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-brand-600/30 mx-auto text-2xl text-white">
-          <i class="ph-bold ph-atom"></i>
+  <div id="login-modal" class="fixed inset-0 bg-dark-bg/95 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-dark-sidebar border border-dark-border w-full max-w-sm rounded-2xl p-6 shadow-2xl space-y-4">
+      <div class="text-center space-y-1.5">
+        <div class="w-11 h-11 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-brand-600/30 mx-auto text-xl text-white">
+          <svg class="w-6 h-6 text-white fill-current" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 14.93V18a1 1 0 0 1-2 0v-1.07A7 7 0 0 1 5.07 11H6a1 1 0 0 1 0-2h-.93A7 7 0 0 1 11 5.07V6a1 1 0 0 1 2 0v-.93A7 7 0 0 1 18.93 11H18a1 1 0 0 1 0 2h.93A7 7 0 0 1 13 16.93z"/></svg>
         </div>
-        <h2 class="text-lg font-bold text-slate-100">Antigravity Web 登录</h2>
-        <p class="text-xs text-slate-400">请输入你的专属账户凭据访问独立会话环境</p>
+        <h2 class="text-base font-bold text-slate-100">Antigravity 登录</h2>
+        <p class="text-xs text-slate-400">请输入你的账户凭据访问独立会话环境</p>
       </div>
 
-      <form id="login-form" onsubmit="submitLogin(event)" class="space-y-3.5">
+      <form id="login-form" onsubmit="submitLogin(event)" class="space-y-3">
         <div>
           <label class="block text-xs font-medium text-slate-300 mb-1">用户名</label>
-          <div class="relative">
-            <i class="ph ph-user absolute left-3 top-2.5 text-slate-400 text-sm"></i>
-            <input id="login-username" type="text" required placeholder="例如: shenb 或 sam"
-                   class="w-full bg-dark-bg border border-dark-border rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition">
-          </div>
+          <input id="login-username" type="text" required placeholder="用户名 (例如: shenb 或 sam)"
+                 class="w-full bg-dark-bg border border-dark-border rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition">
         </div>
 
         <div>
           <label class="block text-xs font-medium text-slate-300 mb-1">密码</label>
-          <div class="relative">
-            <i class="ph ph-lock absolute left-3 top-2.5 text-slate-400 text-sm"></i>
-            <input id="login-password" type="password" required placeholder="请输入密码"
-                   class="w-full bg-dark-bg border border-dark-border rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition">
-          </div>
+          <input id="login-password" type="password" required placeholder="请输入密码"
+                 class="w-full bg-dark-bg border border-dark-border rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition">
         </div>
 
         <div id="login-error" class="hidden text-xs text-red-400 text-center py-1"></div>
@@ -293,30 +301,27 @@
 
   <!-- Quota Modal -->
   <div id="quota-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-    <div class="bg-dark-sidebar border border-dark-border w-full max-w-md rounded-xl p-5 shadow-2xl space-y-4">
-      <div class="flex items-center justify-between border-b border-dark-border pb-3">
-        <div class="flex items-center space-x-2">
-          <i class="ph-bold ph-gauge text-brand-500 text-lg"></i>
-          <h3 class="font-bold text-sm text-slate-100">当前账户原生模型配额</h3>
-        </div>
-        <button onclick="closeQuotaModal()" class="text-slate-400 hover:text-white"><i class="ph-bold ph-x text-lg"></i></button>
+    <div class="bg-dark-sidebar border border-dark-border w-full max-w-sm rounded-xl p-4 shadow-2xl space-y-3">
+      <div class="flex items-center justify-between border-b border-dark-border pb-2.5">
+        <h3 class="font-bold text-xs text-slate-100">当前账户原生模型配额</h3>
+        <button onclick="closeQuotaModal()" class="text-slate-400 hover:text-white">✕</button>
       </div>
-      <div id="quota-modal-content" class="space-y-2.5 max-h-80 overflow-y-auto pr-1 text-xs">
-        <div class="p-3 rounded bg-dark-bg border border-dark-border space-y-1">
+      <div id="quota-modal-content" class="space-y-2 text-xs">
+        <div class="p-2.5 rounded bg-dark-bg border border-dark-border">
           <div class="font-medium text-slate-200">Gemini 3.8 Flash</div>
           <div class="text-[11px] text-emerald-400 font-bold">100% 可用 (循环自动重置)</div>
         </div>
-        <div class="p-3 rounded bg-dark-bg border border-dark-border space-y-1">
+        <div class="p-2.5 rounded bg-dark-bg border border-dark-border">
           <div class="font-medium text-slate-200">Gemini 3.1 Pro</div>
           <div class="text-[11px] text-emerald-400 font-bold">95% 可用 (深度推演代码)</div>
         </div>
-        <div class="p-3 rounded bg-dark-bg border border-dark-border space-y-1">
+        <div class="p-2.5 rounded bg-dark-bg border border-dark-border">
           <div class="font-medium text-slate-200">Claude Sonnet 4.6</div>
           <div class="text-[11px] text-emerald-400 font-bold">100% 可用 (独立配额池)</div>
         </div>
       </div>
       <div class="pt-2 border-t border-dark-border flex justify-end">
-        <button onclick="closeQuotaModal()" class="bg-dark-card hover:bg-dark-hover px-4 py-1.5 rounded-lg text-xs font-medium border border-dark-border text-slate-200">关闭</button>
+        <button onclick="closeQuotaModal()" class="bg-dark-card hover:bg-dark-hover px-3 py-1 rounded-lg text-xs font-medium border border-dark-border text-slate-200">关闭</button>
       </div>
     </div>
   </div>
@@ -331,7 +336,6 @@
     let folderCollapseState = {};
     let currentUser = null;
 
-    // Configure marked options
     marked.setOptions({
       highlight: function(code, lang) {
         if (lang && hljs.getLanguage(lang)) {
@@ -342,17 +346,33 @@
       breaks: true
     });
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // Drawer Control (Mobile & Foldables)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    function openSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebar-overlay');
+      sidebar.classList.remove('-translate-x-full');
+      overlay.classList.remove('hidden');
+    }
+
+    function closeSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebar-overlay');
+      sidebar.classList.add('-translate-x-full');
+      overlay.classList.add('hidden');
+    }
+
+    function closeSidebarOnMobile() {
+      if (window.innerWidth < 1024) {
+        closeSidebar();
+      }
+    }
+
     // Check Auth on Page Load
     window.addEventListener('DOMContentLoaded', async () => {
       await checkAuthStatus();
-
-      // Responsive Sidebar Toggle
-      document.getElementById('toggle-sidebar')?.addEventListener('click', () => {
-        document.getElementById('sidebar').classList.add('-translate-x-full');
-      });
-      document.getElementById('show-sidebar')?.addEventListener('click', () => {
-        document.getElementById('sidebar').classList.remove('-translate-x-full');
-      });
     });
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -367,7 +387,7 @@
           currentUser = data;
           document.getElementById('login-modal').classList.add('hidden');
           document.getElementById('user-display-name').innerText = data.display_name || data.username;
-          document.getElementById('active-user-badge').innerText = `已连接: ${data.username}`;
+          document.getElementById('active-user-badge').innerText = `已连: ${data.username}`;
           await loadTree(true);
         } else {
           showLoginModal();
@@ -403,7 +423,7 @@
         if (res.ok && data.success) {
           document.getElementById('login-modal').classList.add('hidden');
           document.getElementById('user-display-name').innerText = data.display_name || data.username;
-          document.getElementById('active-user-badge').innerText = `已连接: ${data.username}`;
+          document.getElementById('active-user-badge').innerText = `已连: ${data.username}`;
           currentUser = data;
           await loadTree(true);
         } else {
@@ -518,30 +538,29 @@
         const isCollapsed = folderCollapseState[folder.id];
 
         const folderDiv = document.createElement('div');
-        folderDiv.className = 'group rounded-xl bg-dark-card/30 border border-dark-border/50 overflow-hidden transition';
+        folderDiv.className = 'group rounded-xl bg-dark-card/40 border border-dark-border/60 overflow-hidden transition';
         folderDiv.innerHTML = `
           <div class="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-dark-hover/80 cursor-pointer text-slate-300 text-xs select-none">
-            <div class="flex items-center space-x-2 flex-1 min-w-0" onclick="toggleFolderCollapse('${folder.id}')">
-              <i id="arrow-${folder.id}" class="ph-bold ph-caret-down text-[11px] text-slate-500 transition-transform duration-200"
-                 style="transform: ${isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)'}"></i>
-              <i class="ph-bold ph-folder text-brand-500 text-sm"></i>
+            <div class="flex items-center space-x-1.5 flex-1 min-w-0" onclick="toggleFolderCollapse('${folder.id}')">
+              <span id="arrow-${folder.id}" class="text-[10px] text-slate-500 transition-transform duration-200 inline-block"
+                    style="transform: ${isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)'}">▼</span>
               <span class="truncate font-semibold text-slate-200">${escapeHtml(folder.name)}</span>
-              <span class="text-[10px] text-slate-500 bg-dark-bg px-1.5 py-0.5 rounded-full border border-dark-border/40">${folderConvs.length}</span>
+              <span class="text-[10px] text-slate-500 bg-dark-bg px-1 py-0.2 rounded-full border border-dark-border/40">${folderConvs.length}</span>
             </div>
             <div class="flex items-center space-x-1">
-              <button onclick="createNewConversation('${folder.id}')" class="p-1 hover:text-emerald-400 text-slate-400 transition" title="在此项目新建对话">
-                <i class="ph-bold ph-plus text-xs"></i>
+              <button onclick="createNewConversation('${folder.id}'); closeSidebarOnMobile();" class="p-1 hover:text-emerald-400 text-slate-400 transition" title="在此项目新建对话">
+                ➕
               </button>
             </div>
           </div>
-          <div id="children-${folder.id}" class="${isCollapsed ? 'hidden' : ''} px-1.5 pb-1.5 space-y-1"></div>
+          <div id="children-${folder.id}" class="${isCollapsed ? 'hidden' : ''} px-1 pb-1 space-y-1"></div>
         `;
 
         const childrenContainer = folderDiv.querySelector(`#children-${folder.id}`);
         const convsToRender = query ? matchingConvs : folderConvs;
         
         if (convsToRender.length === 0) {
-          childrenContainer.innerHTML = `<div class="text-[11px] text-slate-500 px-3 py-1 italic">暂无会话，点击 + 新建</div>`;
+          childrenContainer.innerHTML = `<div class="text-[10px] text-slate-500 px-3 py-1 italic">暂无会话，点击 ➕ 新建</div>`;
         } else {
           convsToRender.forEach(conv => {
             childrenContainer.appendChild(createConvNode(conv));
@@ -555,8 +574,8 @@
     function createConvNode(conv) {
       const isActive = conv.id === activeConversationId;
       const el = document.createElement('div');
-      el.className = `group flex items-center justify-between px-2.5 py-2 rounded-lg text-xs cursor-pointer transition select-none ${
-        isActive ? 'bg-brand-600/20 text-brand-100 border border-brand-500/40 font-medium shadow-sm' : 'text-slate-400 hover:bg-dark-hover hover:text-slate-200'
+      el.className = `group flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer transition select-none ${
+        isActive ? 'bg-brand-600/25 text-brand-100 border border-brand-500/40 font-medium' : 'text-slate-400 hover:bg-dark-hover hover:text-slate-200'
       }`;
 
       let timeStr = '';
@@ -568,19 +587,15 @@
       }
 
       el.innerHTML = `
-        <div class="flex items-center space-x-2 flex-1 min-w-0" onclick="switchConversation('${conv.id}')">
-          <i class="ph-bold ph-chat-circle text-xs ${isActive ? 'text-brand-400' : 'text-slate-500'}"></i>
+        <div class="flex items-center space-x-1.5 flex-1 min-w-0" onclick="switchConversation('${conv.id}'); closeSidebarOnMobile();">
+          <span class="text-[11px] ${isActive ? 'text-brand-400' : 'text-slate-500'}">💬</span>
           <span class="truncate">${escapeHtml(conv.title)}</span>
         </div>
         <div class="flex items-center space-x-1 flex-shrink-0">
           <span class="text-[10px] text-slate-500 group-hover:hidden font-mono">${timeStr}</span>
           <div class="hidden group-hover:flex items-center space-x-1">
-            <button onclick="promptRenameConversation('${conv.id}', '${escapeHtml(conv.title)}')" class="p-1 hover:text-white text-slate-400 transition" title="重命名会话">
-              <i class="ph-bold ph-pencil-simple text-xs"></i>
-            </button>
-            <button onclick="deleteConversation('${conv.id}')" class="p-1 hover:text-red-400 text-slate-400 transition" title="删除会话">
-              <i class="ph-bold ph-trash text-xs"></i>
-            </button>
+            <button onclick="promptRenameConversation('${conv.id}', '${escapeHtml(conv.title)}')" class="p-0.5 hover:text-white text-slate-400 transition" title="重命名">✏️</button>
+            <button onclick="deleteConversation('${conv.id}')" class="p-0.5 hover:text-red-400 text-slate-400 transition" title="删除">🗑️</button>
           </div>
         </div>
       `;
@@ -626,6 +641,7 @@
           activeFolderId = data.id;
           await loadTree();
           createNewConversation(data.id);
+          closeSidebarOnMobile();
         }
       } catch (err) {
         alert('创建项目失败: ' + err.message);
@@ -652,21 +668,18 @@
 
       const container = document.getElementById('chat-messages');
       container.innerHTML = `
-        <div class="text-center py-16 space-y-4 max-w-lg mx-auto">
-          <div class="w-14 h-14 rounded-2xl bg-gradient-to-tr from-brand-600/30 to-indigo-600/20 text-brand-400 mx-auto flex items-center justify-center text-3xl border border-brand-500/30 shadow-xl">
-            <i class="ph-bold ph-atom"></i>
+        <div class="text-center py-10 sm:py-16 space-y-3 max-w-lg mx-auto px-2">
+          <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-brand-600/30 to-indigo-600/20 text-brand-400 mx-auto flex items-center justify-center text-2xl border border-brand-500/30 shadow-xl">
+            ⚡
           </div>
-          <h3 class="text-lg font-bold text-slate-100">发起新会话</h3>
-          <div class="p-3.5 rounded-xl bg-dark-card border border-dark-border text-xs text-slate-300 space-y-2 text-left">
+          <h3 class="text-base font-bold text-slate-100">发起新会话</h3>
+          <div class="p-3 rounded-xl bg-dark-card border border-dark-border text-xs text-slate-300 space-y-1.5 text-left">
             <div class="flex items-center justify-between">
               <span class="text-slate-400">当前归属项目：</span>
-              <span class="font-semibold text-brand-400 flex items-center space-x-1">
-                <i class="ph-bold ph-folder"></i>
-                <span>${escapeHtml(folderName)}</span>
-              </span>
+              <span class="font-semibold text-brand-400">📁 ${escapeHtml(folderName)}</span>
             </div>
-            <div class="text-[11px] text-slate-500">
-              💡 提示：如需归属到其他项目，可随时在<strong>右上角项目下拉框</strong>中直接切换。对话将直接沉淀至该账户对应的项目目录下。
+            <div class="text-[10px] text-slate-500 leading-normal">
+              💡 可在右上角随时切换归属项目，发送后自动沉淀至对应目录。
             </div>
           </div>
         </div>
@@ -739,8 +752,8 @@
 
       if (messages.length === 0) {
         container.innerHTML = `
-          <div class="text-center py-16 space-y-3">
-            <h3 class="text-base font-semibold text-slate-300">暂无历史消息</h3>
+          <div class="text-center py-12 space-y-2">
+            <h3 class="text-sm font-semibold text-slate-300">暂无历史消息</h3>
             <p class="text-xs text-slate-500">在下方输入框直接提问即可开始。</p>
           </div>
         `;
@@ -758,37 +771,36 @@
       const isUser = role === 'user';
 
       const msgDiv = document.createElement('div');
-      msgDiv.className = `flex space-x-3 text-sm ${isUser ? 'justify-end' : 'justify-start'}`;
+      msgDiv.className = `flex space-x-2 sm:space-x-3 text-xs sm:text-sm ${isUser ? 'justify-end' : 'justify-start'}`;
 
       if (isUser) {
         msgDiv.innerHTML = `
-          <div class="max-w-2xl bg-brand-600/90 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 shadow-md shadow-brand-600/10">
+          <div class="max-w-[85%] sm:max-w-2xl bg-brand-600/90 text-white rounded-2xl rounded-tr-xs px-3.5 py-2 shadow-sm">
             <div class="whitespace-pre-wrap leading-relaxed">${escapeHtml(content)}</div>
           </div>
-          <div class="w-8 h-8 rounded-lg bg-slate-700 flex items-center justify-center text-slate-300 flex-shrink-0 text-xs font-bold">
+          <div class="w-7 h-7 rounded-lg bg-slate-700 flex items-center justify-center text-slate-300 flex-shrink-0 text-xs font-bold">
             我
           </div>
         `;
       } else {
         const thinkingHtml = thinking ? `
-          <details class="mb-3 bg-dark-bg/60 border border-dark-border/80 rounded-lg p-2.5 text-xs text-slate-400">
-            <summary class="cursor-pointer font-medium text-slate-400 flex items-center space-x-1.5 select-none hover:text-slate-300">
-              <i class="ph-bold ph-brain text-brand-400"></i>
-              <span>思考过程 (Reasoning)</span>
+          <details class="mb-2.5 bg-dark-bg/60 border border-dark-border/80 rounded-lg p-2 text-xs text-slate-400">
+            <summary class="cursor-pointer font-medium text-slate-400 flex items-center space-x-1 select-none hover:text-slate-300 text-[11px]">
+              <span>💡 思考过程</span>
             </summary>
-            <div class="mt-2 text-slate-400 whitespace-pre-wrap font-mono text-[11px] leading-relaxed border-t border-dark-border/40 pt-2">${escapeHtml(thinking)}</div>
+            <div class="mt-1.5 text-slate-400 whitespace-pre-wrap font-mono text-[10px] leading-relaxed border-t border-dark-border/40 pt-1.5">${escapeHtml(thinking)}</div>
           </details>
         ` : '';
 
         const renderedContent = marked.parse(content || '');
 
         msgDiv.innerHTML = `
-          <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white flex-shrink-0 shadow-md shadow-brand-600/20">
-            <i class="ph-bold ph-atom text-base"></i>
+          <div class="w-7 h-7 rounded-lg bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white flex-shrink-0 shadow-md flex-shrink-0 text-xs">
+            🤖
           </div>
-          <div class="max-w-3xl flex-1 bg-dark-card border border-dark-border/60 rounded-2xl rounded-tl-sm px-5 py-4 shadow-lg overflow-hidden">
+          <div class="max-w-[90%] sm:max-w-3xl flex-1 bg-dark-card border border-dark-border/60 rounded-2xl rounded-tl-xs px-3.5 py-3 shadow-md overflow-hidden">
             ${thinkingHtml}
-            <div class="prose text-slate-200 leading-relaxed text-sm ${isLive ? 'cursor-blink' : ''}" id="asst-body">
+            <div class="prose text-slate-200 leading-relaxed text-xs sm:text-sm ${isLive ? 'cursor-blink' : ''}" id="asst-body">
               ${renderedContent}
             </div>
           </div>
