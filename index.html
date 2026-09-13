@@ -326,27 +326,30 @@
 
   <!-- Quota Modal -->
   <div id="quota-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-    <div class="bg-dark-sidebar border border-dark-border w-full max-w-sm rounded-xl p-4 shadow-2xl space-y-3">
-      <div class="flex items-center justify-between border-b border-dark-border pb-2.5">
-        <h3 class="font-bold text-xs text-slate-100">当前账户原生模型配额</h3>
-        <button onclick="closeQuotaModal()" class="text-slate-400 hover:text-white">✕</button>
-      </div>
-      <div id="quota-modal-content" class="space-y-2 text-xs">
-        <div class="p-2.5 rounded bg-dark-bg border border-dark-border">
-          <div class="font-medium text-slate-200">Gemini 3.8 Flash</div>
-          <div class="text-[11px] text-emerald-400 font-bold">100% 可用 (循环自动重置)</div>
+    <div class="bg-dark-sidebar border border-dark-border w-full max-w-md rounded-2xl p-4 sm:p-5 shadow-2xl space-y-3.5">
+      <div class="flex items-center justify-between border-b border-dark-border pb-3">
+        <div class="flex items-center space-x-2">
+          <span class="text-base">⚡</span>
+          <div>
+            <h3 class="font-bold text-xs text-slate-100">Antigravity 官方实时配额</h3>
+            <p id="quota-user-tier" class="text-[10px] text-slate-400">正在获取账户信息...</p>
+          </div>
         </div>
-        <div class="p-2.5 rounded bg-dark-bg border border-dark-border">
-          <div class="font-medium text-slate-200">Gemini 3.1 Pro</div>
-          <div class="text-[11px] text-emerald-400 font-bold">95% 可用 (深度推演代码)</div>
-        </div>
-        <div class="p-2.5 rounded bg-dark-bg border border-dark-border">
-          <div class="font-medium text-slate-200">Claude Sonnet 4.6</div>
-          <div class="text-[11px] text-emerald-400 font-bold">100% 可用 (独立配额池)</div>
+        <div class="flex items-center space-x-1.5">
+          <button onclick="fetchQuotaData()" class="p-1.5 rounded-lg hover:bg-dark-hover text-slate-400 hover:text-slate-200 transition cursor-pointer" title="刷新实时配额">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          </button>
+          <button onclick="closeQuotaModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-dark-hover cursor-pointer">✕</button>
         </div>
       </div>
-      <div class="pt-2 border-t border-dark-border flex justify-end">
-        <button onclick="closeQuotaModal()" class="bg-dark-card hover:bg-dark-hover px-3 py-1 rounded-lg text-xs font-medium border border-dark-border text-slate-200">关闭</button>
+
+      <div id="quota-modal-content" class="space-y-2.5 max-h-[60vh] overflow-y-auto pr-0.5 text-xs">
+        <div class="py-6 text-center text-slate-400 text-xs">正在查询官方实时配额...</div>
+      </div>
+
+      <div class="pt-2 border-t border-dark-border flex items-center justify-between text-[10px] text-slate-500">
+        <span>直连 Google CloudCode API 实时计算</span>
+        <button onclick="closeQuotaModal()" class="bg-dark-card hover:bg-dark-hover px-3 py-1 rounded-lg text-xs font-medium border border-dark-border text-slate-200 cursor-pointer">关闭</button>
       </div>
     </div>
   </div>
@@ -1076,11 +1079,72 @@
       scroller.scrollTop = scroller.scrollHeight;
     }
 
-    function openQuotaModal() {
+    async function openQuotaModal() {
       document.getElementById('quota-modal').classList.remove('hidden');
+      await fetchQuotaData();
     }
+
     function closeQuotaModal() {
       document.getElementById('quota-modal').classList.add('hidden');
+    }
+
+    async function fetchQuotaData() {
+      const container = document.getElementById('quota-modal-content');
+      const tierBadge = document.getElementById('quota-user-tier');
+      container.innerHTML = `
+        <div class="py-8 text-center space-y-2">
+          <div class="inline-block w-4 h-4 border-2 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
+          <div class="text-xs text-slate-400">正在直连官方 API 查询实时配额...</div>
+        </div>
+      `;
+
+      try {
+        const res = await fetch('/api/quota');
+        const data = await res.json();
+        if (!data.success && data.error) {
+          container.innerHTML = `<div class="p-3 bg-red-950/40 border border-red-800 rounded-lg text-red-300 text-xs">${escapeHtml(data.error)}</div>`;
+          return;
+        }
+
+        tierBadge.innerText = `当前等级: ${data.tier || 'Antigravity'} · 实时同步`;
+
+        let html = '';
+        data.models.forEach(m => {
+          const pctVal = Math.max(0, Math.min(100, (m.fraction !== undefined ? m.fraction * 100 : 100)));
+          let colorClass = 'bg-emerald-500';
+          let textClass = 'text-emerald-400';
+          if (pctVal < 30) {
+            colorClass = 'bg-rose-500';
+            textClass = 'text-rose-400';
+          } else if (pctVal < 70) {
+            colorClass = 'bg-amber-500';
+            textClass = 'text-amber-400';
+          }
+
+          html += `
+            <div class="p-2.5 rounded-xl bg-dark-bg/80 border border-dark-border space-y-1.5">
+              <div class="flex items-center justify-between">
+                <div class="font-medium text-slate-100 flex items-center space-x-1.5 min-w-0">
+                  <span class="truncate">${escapeHtml(m.name)}</span>
+                  <span class="text-[9px] px-1.5 py-0.2 rounded bg-dark-card border border-dark-border/60 text-slate-400 flex-shrink-0">${escapeHtml(m.pool)}</span>
+                </div>
+                <div class="font-bold text-xs flex-shrink-0 ml-2 ${textClass}">${m.percentage}</div>
+              </div>
+              <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                <div class="${colorClass} h-full rounded-full transition-all duration-500" style="width: ${pctVal}%"></div>
+              </div>
+              <div class="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                <span class="truncate text-slate-500">${escapeHtml(m.desc)}</span>
+                <span class="flex-shrink-0 font-mono text-slate-300 ml-1">${escapeHtml(m.reset_desc)}</span>
+              </div>
+            </div>
+          `;
+        });
+
+        container.innerHTML = html;
+      } catch (err) {
+        container.innerHTML = `<div class="p-3 bg-red-950/40 border border-red-800 rounded-lg text-red-300 text-xs">获取配额失败: ${escapeHtml(err.message)}</div>`;
+      }
     }
 
     function escapeHtml(text) {

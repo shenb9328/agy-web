@@ -16,13 +16,15 @@ import sqlite3
 import uuid
 import re
 import time
+import base64
 import hashlib
 import shutil
 import subprocess
 from http.cookies import SimpleCookie
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
+from urllib.request import Request, urlopen
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 PORT = int(os.environ.get("AGY_WEB_PORT", 8008))
@@ -142,6 +144,107 @@ def parse_transcript_file(user_profile, session_id):
     return messages
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Real Live Quota Engine (Direct Google CloudCode API)
+# ──────────────────────────────────────────────────────────────────────────────
+
+OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
+CLOUDCODE_BASE = "https://daily-cloudcode-pa.googleapis.com"
+ANTIGRAVITY_USER_AGENT = "Mozilla/5.0 Antigravity/1.0.14 Chrome/138.0.7204.235 Electron/37.3.1"
+CLIENT_METADATA = json.dumps({"ideType": "ANTIGRAVITY", "platform": "LINUX", "pluginType": "GEMINI"}, separators=(",", ":"))
+
+def get_oauth_credentials():
+    cfg = load_auth_config()
+    oauth = cfg.get("oauth", {})
+    client_id = os.environ.get("ANTIGRAVITY_CLIENT_ID") or oauth.get("client_id")
+    client_secret = os.environ.get("ANTIGRAVITY_CLIENT_SECRET") or oauth.get("client_secret")
+    if not client_id or not client_secret:
+        proxy_path = Path.home() / "antigravity-proxy" / "antigravity_proxy.py"
+        if proxy_path.exists():
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("agy_proxy_temp", str(proxy_path))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                client_id = client_id or getattr(mod, "CLIENT_ID", None)
+                client_secret = client_secret or getattr(mod, "CLIENT_SECRET", None)
+            except Exception:
+                pass
+    return client_id, client_secret
+
+def get_user_live_quota(home_dir):
+    token_file = Path(home_dir) / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+    if not token_file.exists():
+        token_file = Path.home() / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+
+    if not token_file.exists():
+        raise FileNotFoundError(f"未找到 OAuth Token 凭证文件: {token_file}")
+
+    with open(token_file, "r") as f:
+        data = json.load(f)
+
+    tok = data.get("token", {})
+    access_token = tok.get("access_token")
+    refresh_token = tok.get("refresh_token")
+
+    now_ts = time.time()
+    expiry_raw = tok.get("expiry")
+    expiry_ts = 0.0
+    if expiry_raw:
+        try:
+            s = str(expiry_raw).strip()
+            if "." in s:
+                head, tail = s.split(".", 1)
+                tz_part = ""
+                for i, ch in enumerate(tail):
+                    if ch in "Z+-":
+                        tz_part = tail[i:]
+                        tail = tail[:i]
+                        break
+                s = f"{head}.{tail[:6]}{tz_part}"
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            expiry_ts = dt.timestamp()
+        except Exception:
+            expiry_ts = 0.0
+
+    if not access_token or (expiry_ts - now_ts) < 120:
+        if refresh_token:
+            client_id, client_secret = get_oauth_credentials()
+            if not client_id or not client_secret:
+                raise RuntimeError("未配置 OAuth Client ID 或 Client Secret")
+            body = json.dumps({
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token"
+            }).encode()
+            req = Request(OAUTH_TOKEN_URL, data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
+            with urlopen(req, timeout=15) as resp:
+                refreshed = json.loads(resp.read().decode())
+            access_token = refreshed["access_token"]
+            tok["access_token"] = access_token
+            if "refresh_token" in refreshed:
+                tok["refresh_token"] = refreshed["refresh_token"]
+            exp_dt = datetime.now(timezone.utc) + timedelta(seconds=int(refreshed.get("expires_in", 3600)))
+            tok["expiry"] = exp_dt.strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+            data["token"] = tok
+            with open(token_file, "w") as f:
+                json.dump(data, f, indent=2)
+
+    url = f"{CLOUDCODE_BASE}/v1internal:fetchAvailableModels"
+    req = Request(url, data=b"{}", method="POST")
+    req.add_header("Authorization", f"Bearer {access_token}")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", ANTIGRAVITY_USER_AGENT)
+    req.add_header("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+    req.add_header("Client-Metadata", CLIENT_METADATA)
+
+    with urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode())
+
+# ──────────────────────────────────────────────────────────────────────────────
 # HTTP Request Handler with Multi-User Session Isolation
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -249,7 +352,7 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
         elif path == "/api/models":
             self.handle_get_models()
         elif path == "/api/quota":
-            self.handle_get_quota(username)
+            self.handle_get_quota(profile)
         else:
             super().do_GET()
 
@@ -560,15 +663,94 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
         ]
         self._send_json({"data": models})
 
-    def handle_get_quota(self, username):
-        self._send_json({
-            "tier": f"Antigravity CLI ({username})",
-            "models": {
-                "Gemini 3.8 Flash": {"remaining_percentage": "100%", "reset_time": "循环自动重置"},
-                "Gemini 3.1 Pro": {"remaining_percentage": "95%", "reset_time": "循环自动重置"},
-                "Claude Sonnet 4.6": {"remaining_percentage": "100%", "reset_time": "独立配额池"}
-            }
-        })
+    def handle_get_quota(self, user_profile):
+        try:
+            home_dir = user_profile.get("home", str(Path.home()))
+            payload = get_user_live_quota(home_dir)
+            models = payload.get("models", {})
+            now_utc = datetime.now(timezone.utc)
+
+            displayed_models = [
+                {
+                    "name": "Gemini 3.8 Flash",
+                    "desc": "极速响应，百万上下文",
+                    "key": "gemini-3-flash",
+                    "pool": "Gemini 共享配额池"
+                },
+                {
+                    "name": "Gemini 3.1 Pro",
+                    "desc": "高阶代码与深度推演",
+                    "key": "gemini-3.1-pro-low",
+                    "pool": "Gemini 共享配额池"
+                },
+                {
+                    "name": "Claude Sonnet 4.6",
+                    "desc": "思考模式，高品质代码",
+                    "key": "claude-sonnet-4-6",
+                    "pool": "Claude 独立配额池"
+                },
+                {
+                    "name": "Claude Opus 4.6",
+                    "desc": "超高智力旗舰",
+                    "key": "claude-opus-4-6-thinking",
+                    "pool": "Claude 独立配额池"
+                },
+                {
+                    "name": "GPT-OSS 120B",
+                    "desc": "开源旗舰大模型",
+                    "key": "gpt-oss-120b-medium",
+                    "pool": "开源模型独立池"
+                }
+            ]
+
+            result_models = []
+            for item in displayed_models:
+                info = models.get(item["key"], {})
+                q = info.get("quotaInfo", {})
+                rem = q.get("remainingFraction")
+                reset_str = q.get("resetTime")
+
+                percentage = f"{rem * 100:.1f}%" if rem is not None else "100.0%"
+                fraction = rem if rem is not None else 1.0
+
+                time_desc = "循环自动重置"
+                if reset_str:
+                    try:
+                        dt = datetime.fromisoformat(reset_str.replace("Z", "+00:00"))
+                        delta = dt - now_utc
+                        total_sec = int(delta.total_seconds())
+                        if total_sec > 0:
+                            mins = total_sec // 60
+                            secs = total_sec % 60
+                            time_desc = f"约 {mins} 分 {secs} 秒后重置"
+                        else:
+                            time_desc = "即将循环重置"
+                    except Exception:
+                        time_desc = reset_str
+
+                result_models.append({
+                    "name": item["name"],
+                    "desc": item["desc"],
+                    "pool": item["pool"],
+                    "percentage": percentage,
+                    "fraction": fraction,
+                    "reset_time": reset_str,
+                    "reset_desc": time_desc
+                })
+
+            tier_name = payload.get("currentTier", {}).get("name") or user_profile.get("display_name", "Antigravity")
+
+            self._send_json({
+                "success": True,
+                "tier": tier_name,
+                "models": result_models
+            })
+        except Exception as e:
+            print(f"[Agy-Web] Error fetching live quota: {e}")
+            self._send_json({
+                "success": False,
+                "error": f"获取官方实时配额失败: {str(e)}"
+            }, status=500)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Direct agy CLI Execution (Isolated per user profile)
