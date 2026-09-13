@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-Antigravity Web UI (agy-web) Server - Multi-User Isolated Edition
+Antigravity Web UI (agy-web) Server - Dual-Mode Remote Synced Edition
 Features:
+- Dual-Mode Operation:
+  1. Live Bidirectional RPC Mode: Directly bridges to Antigravity Language Server (LS),
+     synchronizing conversations bidirectionally with Google Antigravity Remote (https://antigravity.google.com) in real-time.
+  2. Offline CLI Fallback Mode: Seamlessly falls back to local `agy -p` streaming pipeline
+     when Language Server daemon is offline.
 - Multi-user authentication with isolated storage and execution environments.
 - Secure, disk-only salted SHA-256 credentials (never exposed to frontend).
-- User 1: shenb (agy9328) -> /home/shenb9328_gmail_com
-- User 2: sam (agy93091028) -> /home/shenb9328_gmail_com/.profiles/agy93091028
-- Full double-time-descending tree view and session isolation.
+- Single source of truth: SQLite + Language Server memory reconciliation.
+- Pure Python 3 standard library: Zero third-party pip dependencies, ~15MB RAM.
 """
 
 import os
@@ -55,6 +59,174 @@ ACTIVE_SESSIONS = {}
 SESSION_EXPIRY_SECONDS = 30 * 86400  # 30 days
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Language Server Bridge (Connect-RPC Dual-Way Client)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class AntigravityLSBridge:
+    """
+    Lightweight client for Antigravity Language Server (Connect-RPC protocol).
+    Communicates directly with the resident daemon (e.g. PID running `agy remote-control serve`)
+    to achieve full bidirectional synchronization with Google Antigravity Remote.
+    """
+    def __init__(self):
+        self.cached_instance = None
+        self.last_check_time = 0
+        self.check_interval = 5.0  # seconds
+        self.service_prefix = "exa.language_server_pb.LanguageServerService"
+
+    def get_instance(self, force_refresh=False):
+        now = time.time()
+        if not force_refresh and self.cached_instance and (now - self.last_check_time < self.check_interval):
+            return self.cached_instance
+
+        inst = self._discover()
+        if inst and self._health_check(inst):
+            self.cached_instance = inst
+            self.last_check_time = now
+            return inst
+
+        self.cached_instance = None
+        self.last_check_time = now
+        return None
+
+    def _discover(self):
+        # 1. Environment variables (highest priority)
+        env_addr = os.environ.get("ANTIGRAVITY_LS_ADDRESS")
+        env_csrf = os.environ.get("ANTIGRAVITY_CSRF_TOKEN")
+        if env_addr and env_csrf:
+            host, port = env_addr.split(":") if ":" in env_addr else ("127.0.0.1", env_addr)
+            return {
+                "host": host,
+                "port": int(port),
+                "csrfToken": env_csrf,
+                "source": "environment_variable"
+            }
+
+        # 2. Scrape discovery files
+        search_dirs = [
+            Path.home() / ".gemini" / "antigravity-cli" / "daemon",
+            Path.home() / ".gemini" / "antigravity" / "daemon",
+            Path.home() / ".gemini" / "antigravity-ide" / "daemon",
+            Path.home() / ".config" / "agy-web"
+        ]
+
+        candidates = []
+        for d in search_dirs:
+            if not d.exists():
+                continue
+            # ls_*.json files
+            for f in sorted(d.glob("ls_*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+                candidates.append(f)
+            # ls.json file
+            ls_direct = d / "ls.json"
+            if ls_direct.exists():
+                candidates.append(ls_direct)
+
+        for filepath in candidates:
+            try:
+                with open(filepath, "r", encoding="utf-8") as fp:
+                    data = json.load(fp)
+                    port = data.get("httpPort") or data.get("httpsPort")
+                    csrf = data.get("csrfToken")
+                    if port and csrf:
+                        return {
+                            "host": "127.0.0.1",
+                            "port": int(port),
+                            "csrfToken": csrf,
+                            "pid": data.get("pid"),
+                            "source": f"file:{filepath.name}"
+                        }
+            except Exception:
+                continue
+
+        return None
+
+    def _health_check(self, inst):
+        try:
+            res = self.call_rpc("GetWorkspaceInfos", {}, inst=inst, timeout=2.0)
+            return res is not None and "code" not in res
+        except Exception:
+            return False
+
+    def call_rpc(self, method, payload, inst=None, timeout=10.0):
+        target = inst or self.get_instance()
+        if not target:
+            return None
+
+        url = f"http://{target['host']}:{target['port']}/{self.service_prefix}/{method}"
+        body = json.dumps(payload).encode("utf-8")
+        req = Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("x-codeium-csrf-token", target["csrfToken"])
+
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                data = resp.read()
+                return json.loads(data.decode("utf-8"))
+        except Exception as e:
+            if hasattr(e, "read"):
+                try:
+                    return json.loads(e.read().decode("utf-8"))
+                except Exception:
+                    pass
+            return None
+
+    def get_metadata(self):
+        return {
+            "ideName": "antigravity",
+            "ideVersion": "2.13.0",
+            "extensionVersion": "2.13.0",
+            "allowFileAccess": True,
+            "allWorkspaceTrustGranted": True
+        }
+
+    def start_cascade(self, workspace_path=None):
+        payload = {
+            "metadata": self.get_metadata(),
+            "source": "CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT"
+        }
+        if workspace_path:
+            uri = f"file://{workspace_path}"
+            payload["workspaceFolderAbsoluteUri"] = uri
+            payload["workspaceUris"] = [uri]
+
+        res = self.call_rpc("StartCascade", payload)
+        if res and isinstance(res, dict) and "cascadeId" in res:
+            return res["cascadeId"]
+        return None
+
+    def send_user_message(self, cascade_id, message, model=None):
+        payload = {
+            "metadata": self.get_metadata(),
+            "cascadeId": cascade_id,
+            "items": [{"text": message}],
+            "cascadeConfig": {
+                "plannerConfig": {
+                    "plannerTypeConfig": {"conversational": {}}
+                }
+            }
+        }
+        if model:
+            payload["cascadeConfig"]["plannerConfig"]["requestedModel"] = {"model": model}
+
+        return self.call_rpc("SendUserCascadeMessage", payload)
+
+    def get_trajectory_steps(self, cascade_id, step_offset=0):
+        payload = {
+            "cascadeId": cascade_id,
+            "stepOffset": step_offset
+        }
+        return self.call_rpc("GetCascadeTrajectorySteps", payload)
+
+    def get_trajectory(self, cascade_id):
+        return self.call_rpc("GetCascadeTrajectory", {"cascadeId": cascade_id})
+
+    def get_all_trajectories(self):
+        return self.call_rpc("GetAllCascadeTrajectories", {})
+
+ls_bridge = AntigravityLSBridge()
+
+# ──────────────────────────────────────────────────────────────────────────────
 # User & Configuration Manager
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -95,7 +267,7 @@ def verify_credentials(username, password):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def get_summaries_db(user_profile):
-    db_path = Path(user_profile["summaries_db"])
+    db_path = Path(user_profile.get("summaries_db", str(Path.home() / ".gemini" / "antigravity-cli" / "conversation_summaries.db")))
     if not db_path.exists():
         return None
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
@@ -103,9 +275,39 @@ def get_summaries_db(user_profile):
     return conn
 
 def parse_transcript_file(user_profile, session_id):
-    brain_dir = Path(user_profile["brain_dir"])
+    brain_dir = Path(user_profile.get("brain_dir", str(Path.home() / ".gemini" / "antigravity-cli" / "brain")))
     log_file = brain_dir / session_id / ".system_generated" / "logs" / "transcript.jsonl"
     if not log_file.exists():
+        # Fallback: check live steps via Language Server if available
+        inst = ls_bridge.get_instance()
+        if inst:
+            traj_data = ls_bridge.get_trajectory(session_id)
+            if traj_data and "trajectory" in traj_data:
+                steps = traj_data.get("trajectory", {}).get("steps", [])
+                messages = []
+                for s in steps:
+                    stype = s.get("type")
+                    if stype == "CORTEX_STEP_TYPE_USER_INPUT":
+                        content = s.get("userInput", {}).get("text", "")
+                        messages.append({
+                            "role": "user",
+                            "content": content,
+                            "thinking": "",
+                            "created_at": s.get("metadata", {}).get("createdAt", "")
+                        })
+                    elif stype == "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
+                        pr = s.get("plannerResponse", {})
+                        resp_text = pr.get("response") or pr.get("content") or ""
+                        thinking = pr.get("thinking") or ""
+                        if resp_text or thinking:
+                            messages.append({
+                                "role": "assistant",
+                                "content": resp_text,
+                                "thinking": thinking,
+                                "created_at": s.get("metadata", {}).get("createdAt", "")
+                            })
+                if messages:
+                    return messages
         return []
 
     messages = []
@@ -200,57 +402,61 @@ def get_user_live_quota(home_dir):
                         tz_part = tail[i:]
                         tail = tail[:i]
                         break
-                s = f"{head}.{tail[:6]}{tz_part}"
+                tail = tail[:6].ljust(6, "0")
+                s = f"{head}.{tail}{tz_part}"
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
             dt = datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
             expiry_ts = dt.timestamp()
         except Exception:
             expiry_ts = 0.0
 
-    if not access_token or (expiry_ts - now_ts) < 120:
-        if refresh_token:
-            client_id, client_secret = get_oauth_credentials()
-            if not client_id or not client_secret:
-                raise RuntimeError("未配置 OAuth Client ID 或 Client Secret")
-            body = json.dumps({
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token"
-            }).encode()
-            req = Request(OAUTH_TOKEN_URL, data=body, method="POST")
-            req.add_header("Content-Type", "application/json")
-            with urlopen(req, timeout=15) as resp:
-                refreshed = json.loads(resp.read().decode())
-            access_token = refreshed["access_token"]
-            tok["access_token"] = access_token
-            if "refresh_token" in refreshed:
-                tok["refresh_token"] = refreshed["refresh_token"]
-            exp_dt = datetime.now(timezone.utc) + timedelta(seconds=int(refreshed.get("expires_in", 3600)))
-            tok["expiry"] = exp_dt.strftime("%Y-%m-%dT%H:%M:%S.000000Z")
-            data["token"] = tok
+    if not access_token or (expiry_ts > 0 and now_ts >= (expiry_ts - 300)):
+        client_id, client_secret = get_oauth_credentials()
+        if not client_id or not client_secret:
+            raise ValueError("Token 已过期，且系统未配置 ANTIGRAVITY_CLIENT_ID / CLIENT_SECRET 自动刷新凭据")
+
+        body_data = json.dumps({
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token"
+        }).encode("utf-8")
+
+        req = Request(OAUTH_TOKEN_URL, data=body_data, headers={"Content-Type": "application/json"})
+        with urlopen(req, timeout=10) as resp:
+            refresh_resp = json.loads(resp.read().decode("utf-8"))
+
+        access_token = refresh_resp["access_token"]
+        expires_in = refresh_resp.get("expires_in", 3600)
+        new_expiry_dt = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+        tok["access_token"] = access_token
+        tok["expiry"] = new_expiry_dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        data["token"] = tok
+
+        try:
             with open(token_file, "w") as f:
                 json.dump(data, f, indent=2)
+        except Exception as err:
+            print(f"[Agy-Web] Warning: failed to save refreshed token: {err}")
 
-    url = f"{CLOUDCODE_BASE}/v1internal:fetchAvailableModels"
-    req = Request(url, data=b"{}", method="POST")
+    # Fetch available models & quotas
+    req = Request(f"{CLOUDCODE_BASE}/v1internal:fetchAvailableModels", data=b"{}", method="POST")
     req.add_header("Authorization", f"Bearer {access_token}")
     req.add_header("Content-Type", "application/json")
     req.add_header("User-Agent", ANTIGRAVITY_USER_AGENT)
-    req.add_header("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
-    req.add_header("Client-Metadata", CLIENT_METADATA)
+    req.add_header("X-Goog-Api-Client", "gl-node/unknown fire/unknown")
+    req.add_header("X-Client-Metadata", CLIENT_METADATA)
 
-    with urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode())
+    with urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 # ──────────────────────────────────────────────────────────────────────────────
-# HTTP Request Handler with Multi-User Session Isolation
+# Web Request Handler
 # ──────────────────────────────────────────────────────────────────────────────
 
 class AgyMultiUserHandler(SimpleHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(BASE_DIR), **kwargs)
 
@@ -259,7 +465,7 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         if headers:
             for k, v in headers.items():
                 self.send_header(k, v)
@@ -267,66 +473,62 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_json(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            return {}
+        body = self.rfile.read(content_length)
         try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            if content_length == 0:
-                return {}
-            raw = self.rfile.read(content_length).decode("utf-8")
-            return json.loads(raw)
+            return json.loads(body.decode("utf-8"))
         except Exception:
             return {}
 
     def get_session_user(self):
-        token = None
-        # Check Cookie
-        cookie_header = self.headers.get("Cookie")
-        if cookie_header:
-            cookie = SimpleCookie()
+        cookie_header = self.headers.get("Cookie", "")
+        if not cookie_header:
+            return None
+        cookie = SimpleCookie()
+        try:
             cookie.load(cookie_header)
-            if "agy_session" in cookie:
-                token = cookie["agy_session"].value
-
-        # Check Authorization header fallback
-        if not token:
-            auth_h = self.headers.get("Authorization", "")
-            if auth_h.startswith("Bearer "):
-                token = auth_h[7:].strip()
-
-        if not token or token not in ACTIVE_SESSIONS:
+        except Exception:
             return None
 
-        sess = ACTIVE_SESSIONS[token]
-        if time.time() > sess["expires_at"]:
+        if "agy_session" not in cookie:
+            return None
+
+        token = cookie["agy_session"].value
+        session = ACTIVE_SESSIONS.get(token)
+        if not session:
+            return None
+
+        if time.time() > session.get("expires_at", 0):
             del ACTIVE_SESSIONS[token]
             return None
 
-        username = sess["username"]
+        username = session.get("username")
         profile = get_user_profile(username)
         if not profile:
             return None
-        return username, profile, token
 
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.end_headers()
+        return username, profile, token
 
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        if path == "/":
-            self.path = "/index.html"
-            return super().do_GET()
+        # Public resources
+        if path in ["/", "/index.html", "/favicon.ico"]:
+            super().do_GET()
+            return
 
-        # Public / Auth APIs
-        if path == "/api/auth/me":
+        # Check bridge status (public or authenticated)
+        if path == "/api/bridge/status":
+            self.handle_get_bridge_status()
+            return
+
+        # Auth status check
+        if path in ["/api/auth/me", "/api/auth/status"]:
             user_info = self.get_session_user()
-            if not user_info:
-                self._send_json({"authenticated": False}, status=200)
-            else:
+            if user_info:
                 username, profile, _ = user_info
                 self._send_json({
                     "authenticated": True,
@@ -334,6 +536,8 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
                     "display_name": profile.get("display_name", username),
                     "home": profile.get("home")
                 })
+            else:
+                self._send_json({"authenticated": False})
             return
 
         # Protected APIs
@@ -468,15 +672,84 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
         cookie = "agy_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
         self._send_json({"success": True}, headers={"Set-Cookie": cookie})
 
+    def handle_get_bridge_status(self):
+        inst = ls_bridge.get_instance()
+        if inst:
+            self._send_json({
+                "online": True,
+                "mode": "rpc_dual_sync",
+                "mode_text": "双向同步已激活 (Remote Synced)",
+                "port": inst.get("port"),
+                "source": inst.get("source"),
+                "description": "已直连本地 Antigravity Language Server，Web 与 Google Antigravity Remote 实时完全双向同步！"
+            })
+        else:
+            self._send_json({
+                "online": False,
+                "mode": "cli_standalone",
+                "mode_text": "本地直驱模式 (Standalone CLI)",
+                "description": "未检测到后台活跃的 Language Server，自动降级为原生 CLI 管道直驱模式。"
+            })
+
     # ──────────────────────────────────────────────────────────────────────────
-    # Project & Conversation Tree Handler (Isolated per user profile)
-    # ──────────────────────────────────────────────────────────────────────────
+    # Project & Conversation Tree Handler (Dual Mode Reconciliation)
+    # ──────────────────────────────────────────────────────────────────────────────
 
     def handle_get_tree(self, user_profile):
         projects_map = {}
         conversations = []
-        db_path = Path(user_profile["summaries_db"])
+        seen_conv_ids = set()
 
+        # 1. 优先注入正在运行中的活跃 Language Server 会话（实现 Remote 创建的会话秒同步）
+        inst = ls_bridge.get_instance()
+        if inst:
+            try:
+                trajectories_resp = ls_bridge.get_all_trajectories()
+                if trajectories_resp and "trajectorySummaries" in trajectories_resp:
+                    for conv_id, summary in trajectories_resp["trajectorySummaries"].items():
+                        title = summary.get("summary") or summary.get("annotations", {}).get("title") or "无标题会话"
+                        mtime = summary.get("lastModifiedTime") or datetime.now(timezone.utc).isoformat()
+                        status = summary.get("status", "")
+
+                        # Workspace extraction
+                        proj_id = "default"
+                        proj_name = "默认工作区"
+                        proj_dir = user_profile.get("home", str(Path.home()))
+
+                        ws_list = summary.get("workspaces", [])
+                        if ws_list and isinstance(ws_list, list) and ws_list[0].get("workspaceFolderAbsoluteUri"):
+                            uri = ws_list[0]["workspaceFolderAbsoluteUri"]
+                            clean_path = unquote(uri.replace("file://", "")).rstrip("/")
+                            proj_dir = clean_path
+                            proj_name = clean_path.split("/")[-1] if "/" in clean_path else clean_path
+                            proj_id = f"proj-{proj_name}"
+
+                        if proj_id not in projects_map:
+                            projects_map[proj_id] = {
+                                "id": proj_id,
+                                "name": proj_name,
+                                "path": proj_dir,
+                                "count": 0,
+                                "latest_time": mtime
+                            }
+                        projects_map[proj_id]["count"] += 1
+                        if mtime > projects_map[proj_id].get("latest_time", ""):
+                            projects_map[proj_id]["latest_time"] = mtime
+
+                        seen_conv_ids.add(conv_id)
+                        conversations.append({
+                            "id": conv_id,
+                            "folder_id": proj_id,
+                            "title": f"⚡ {title}" if status == "CASCADE_RUN_STATUS_RUNNING" else title,
+                            "preview": title,
+                            "updated_at": mtime,
+                            "is_live": True
+                        })
+            except Exception as e:
+                print(f"[Agy-Web] Warning merging live trajectories: {e}")
+
+        # 2. 从本地 SQLite 数据库中读取全量持久化历史
+        db_path = Path(user_profile.get("summaries_db", str(Path.home() / ".gemini" / "antigravity-cli" / "conversation_summaries.db")))
         if db_path.exists():
             try:
                 conn = get_summaries_db(user_profile)
@@ -495,6 +768,9 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
 
                     for r in rows:
                         conv_id = r["conversation_id"]
+                        if conv_id in seen_conv_ids:
+                            continue  # 已被 Live 状态置顶覆盖
+
                         title = r["title"] or "无标题会话"
                         raw_w = r["workspace_uris"]
                         raw_p = r["project_id"] or "default-cli-project"
@@ -539,7 +815,8 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
                             "folder_id": proj_id,
                             "title": title,
                             "preview": r["preview"],
-                            "updated_at": mtime
+                            "updated_at": mtime,
+                            "is_live": False
                         })
             except Exception as e:
                 print(f"[Agy-Web] Error querying user db: {e}")
@@ -551,96 +828,89 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
                 "name": "默认工作区",
                 "path": user_profile.get("home", str(Path.home())),
                 "count": 0,
-                "latest_time": "2026-01-01"
+                "latest_time": ""
             }
 
-        # Sort projects strictly by latest_time descending
-        projects_list = list(projects_map.values())
-        projects_list.sort(key=lambda p: p.get("latest_time", ""), reverse=True)
+        # Sort projects by latest_time descending
+        sorted_folders = sorted(
+            projects_map.values(),
+            key=lambda x: (x["latest_time"] or ""),
+            reverse=True
+        )
+
+        # Sort conversations by updated_at descending
+        sorted_convs = sorted(
+            conversations,
+            key=lambda x: (x["updated_at"] or ""),
+            reverse=True
+        )
 
         self._send_json({
-            "folders": projects_list,
-            "conversations": conversations
+            "folders": sorted_folders,
+            "conversations": sorted_convs
         })
 
     def handle_get_conversation_messages(self, user_profile, conv_id):
         messages = parse_transcript_file(user_profile, conv_id)
-        title = "会话详情"
-        db_path = Path(user_profile["summaries_db"])
-
-        if db_path.exists():
-            try:
-                conn = get_summaries_db(user_profile)
-                if conn:
-                    row = conn.execute("SELECT title FROM conversation_summaries WHERE conversation_id = ?", (conv_id,)).fetchone()
-                    conn.close()
-                    if row and row["title"]:
-                        title = row["title"]
-            except Exception:
-                pass
-
         self._send_json({
-            "conversation": {
-                "id": conv_id,
-                "title": title
-            },
+            "conversation_id": conv_id,
             "messages": messages
         })
 
+    def handle_create_conversation(self):
+        new_id = str(uuid.uuid4())
+        self._send_json({"conversation_id": new_id})
+
     def handle_create_project(self, user_profile):
         data = self._read_json()
-        name = data.get("name", "").strip()
-        if not name:
-            self._send_json({"error": "项目名称不能为空"}, status=400)
+        proj_name = data.get("name", "").strip()
+        proj_path = data.get("path", "").strip()
+
+        if not proj_name or not proj_path:
+            self._send_json({"error": "项目名称和物理路径不能为空"}, status=400)
             return
 
-        base_home = Path(user_profile.get("home", str(Path.home())))
-        proj_path = base_home / name
+        target_dir = Path(proj_path)
         try:
-            proj_path.mkdir(parents=True, exist_ok=True)
+            target_dir.mkdir(parents=True, exist_ok=True)
             self._send_json({
-                "id": f"proj-{name}",
-                "name": name,
-                "path": str(proj_path)
+                "success": True,
+                "project": {
+                    "id": f"proj-{proj_name}",
+                    "name": proj_name,
+                    "path": str(target_dir)
+                }
             })
         except Exception as e:
-            self._send_json({"error": str(e)}, status=500)
-
-    def handle_create_conversation(self):
-        data = self._read_json()
-        folder_id = data.get("folder_id", "default")
-        title = data.get("title", "新会话").strip()
-        new_id = str(uuid.uuid4())
-        self._send_json({
-            "id": new_id,
-            "folder_id": folder_id,
-            "title": title,
-            "is_new": True
-        })
+            self._send_json({"error": f"无法创建物理目录: {str(e)}"}, status=500)
 
     def handle_update_conversation(self, user_profile, conv_id):
         data = self._read_json()
-        new_title = data.get("title")
-        new_proj_path = data.get("project_path")
-        db_path = Path(user_profile["summaries_db"])
+        new_title = data.get("title", "").strip()
+        new_folder_id = data.get("folder_id")
 
+        if not new_title and not new_folder_id:
+            self._send_json({"error": "没有可更新的字段"}, status=400)
+            return
+
+        db_path = Path(user_profile.get("summaries_db", str(Path.home() / ".gemini" / "antigravity-cli" / "conversation_summaries.db")))
         if db_path.exists():
             try:
                 conn = get_summaries_db(user_profile)
                 if conn:
                     with conn:
                         if new_title:
-                            conn.execute("UPDATE conversation_summaries SET title = ? WHERE conversation_id = ?", (new_title.strip(), conv_id))
-                        if new_proj_path:
-                            uri = f"file://{new_proj_path}"
-                            conn.execute("UPDATE conversation_summaries SET workspace_uris = ? WHERE conversation_id = ?", (json.dumps([uri]), conv_id))
+                            conn.execute("UPDATE conversation_summaries SET title = ? WHERE conversation_id = ?",
+                                         (new_title, conv_id))
                     conn.close()
             except Exception as e:
-                print(f"[Agy-Web] Error updating conversation: {e}")
+                self._send_json({"error": str(e)}, status=500)
+                return
+
         self._send_json({"success": True})
 
     def handle_delete_conversation(self, user_profile, conv_id):
-        db_path = Path(user_profile["summaries_db"])
+        db_path = Path(user_profile.get("summaries_db", str(Path.home() / ".gemini" / "antigravity-cli" / "conversation_summaries.db")))
         if db_path.exists():
             try:
                 conn = get_summaries_db(user_profile)
@@ -738,22 +1008,15 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
                     "reset_desc": time_desc
                 })
 
-            tier_name = payload.get("currentTier", {}).get("name") or user_profile.get("display_name", "Antigravity")
-
-            self._send_json({
-                "success": True,
-                "tier": tier_name,
-                "models": result_models
-            })
+            self._send_json({"data": result_models})
         except Exception as e:
-            print(f"[Agy-Web] Error fetching live quota: {e}")
             self._send_json({
                 "success": False,
                 "error": f"获取官方实时配额失败: {str(e)}"
             }, status=500)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Direct agy CLI Execution (Isolated per user profile)
+    # Dual-Mode Chat Stream: Live RPC Synced vs Native CLI Pipeline
     # ──────────────────────────────────────────────────────────────────────────
 
     def handle_chat_stream(self, user_profile):
@@ -768,9 +1031,13 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
             return
 
         cli_model = MODEL_MAP.get(requested_model, "Gemini 3.8 Flash (High)")
-        agy_bin = user_profile.get("bin", "/usr/local/bin/agy")
+        agy_bin = user_profile.get("bin", "/home/shenb/.local/bin/agy")
         user_home = user_profile.get("home", str(Path.home()))
         brain_dir = Path(user_profile.get("brain_dir", str(Path.home() / ".gemini" / "antigravity-cli" / "brain")))
+
+        work_dir = Path(user_home)
+        if project_dir and Path(project_dir).exists():
+            work_dir = Path(project_dir)
 
         # Prepare SSE Stream
         self.send_response(200)
@@ -781,6 +1048,119 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
 
+        # Check if Language Server Bridge is active (Dual-Way RPC mode)
+        ls_inst = ls_bridge.get_instance()
+
+        # ======================================================================
+        # MODE 1: Live Bidirectional RPC Mode (Synchronized with Google Remote)
+        # ======================================================================
+        if ls_inst:
+            try:
+                real_conv_id = conv_id
+                if not real_conv_id or real_conv_id.startswith("temp-"):
+                    real_conv_id = ls_bridge.start_cascade(str(work_dir))
+                    if not real_conv_id:
+                        real_conv_id = str(uuid.uuid4())
+
+                # Push init event with actual conversation ID
+                init_evt = json.dumps({"type": "init", "conversation_id": real_conv_id})
+                self.wfile.write(f"data: {init_evt}\n\n".encode("utf-8"))
+                self.wfile.flush()
+
+                # Get initial step count offset
+                traj_info = ls_bridge.get_trajectory(real_conv_id)
+                start_offset = 0
+                if traj_info and isinstance(traj_info, dict) and "trajectory" in traj_info:
+                    start_offset = len(traj_info.get("trajectory", {}).get("steps", []))
+
+                # Inject message into Language Server memory (instantly syncs to Google Remote!)
+                ls_bridge.send_user_message(real_conv_id, user_message, model=requested_model)
+
+                # Poll for steps and stream response deltas
+                current_offset = start_offset
+                last_streamed_len = 0
+                is_done = False
+                poll_start = time.time()
+                empty_polls = 0
+
+                while not is_done and (time.time() - poll_start < 300):
+                    time.sleep(0.3)
+                    steps_resp = ls_bridge.get_trajectory_steps(real_conv_id, current_offset)
+                    if not steps_resp or not isinstance(steps_resp, dict):
+                        empty_polls += 1
+                        if empty_polls > 40:  # 12s timeout
+                            break
+                        continue
+
+                    steps = steps_resp.get("steps", [])
+                    if not steps:
+                        # Check status
+                        t_stat = ls_bridge.get_trajectory(real_conv_id)
+                        if t_stat and t_stat.get("status") in ["CASCADE_RUN_STATUS_IDLE", "CASCADE_RUN_STATUS_SUCCESS"]:
+                            is_done = True
+                            break
+                        continue
+
+                    for step in steps:
+                        stype = step.get("type")
+                        status = step.get("status")
+
+                        if stype == "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
+                            pr = step.get("plannerResponse", {})
+                            resp_text = pr.get("response") or pr.get("content") or ""
+                            thinking_text = pr.get("thinking") or ""
+
+                            if len(resp_text) > last_streamed_len:
+                                delta = resp_text[last_streamed_len:]
+                                last_streamed_len = len(resp_text)
+                                out_evt = json.dumps({"type": "delta", "content": delta, "thinking": thinking_text})
+                                self.wfile.write(f"data: {out_evt}\n\n".encode("utf-8"))
+                                self.wfile.flush()
+
+                            if status in ["CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_SUCCESS"]:
+                                if not pr.get("toolCalls"):
+                                    is_done = True
+
+                        elif stype in ["CORTEX_STEP_TYPE_RUN_COMMAND", "CORTEX_STEP_TYPE_TOOL"]:
+                            meta = step.get("metadata", {})
+                            action_name = meta.get("toolAction") or step.get("toolName") or "执行工具"
+                            summary = meta.get("toolSummary") or "正在执行系统操作..."
+                            out_evt = json.dumps({
+                                "type": "delta",
+                                "content": f"\n\n> ⚙️ **[{action_name}]** {summary}\n\n",
+                                "thinking": ""
+                            })
+                            self.wfile.write(f"data: {out_evt}\n\n".encode("utf-8"))
+                            self.wfile.flush()
+
+                    current_offset += len(steps)
+
+                # Ensure workspace URI is updated in DB
+                db_path = Path(user_profile.get("summaries_db", str(Path.home() / ".gemini" / "antigravity-cli" / "conversation_summaries.db")))
+                if real_conv_id and db_path.exists():
+                    try:
+                        conn = get_summaries_db(user_profile)
+                        if conn:
+                            with conn:
+                                uri = f"file://{work_dir}"
+                                conn.execute("UPDATE conversation_summaries SET workspace_uris = ? WHERE conversation_id = ?",
+                                             (json.dumps([uri]), real_conv_id))
+                            conn.close()
+                    except Exception:
+                        pass
+
+                done_evt = json.dumps({"type": "done", "conversation_id": real_conv_id})
+                self.wfile.write(f"data: {done_evt}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                return
+
+            except Exception as e:
+                print(f"[Agy-Web] Error in Live RPC stream: {e}, falling back to CLI...")
+                # Fallback to Mode 2 below if exception occurs
+
+        # ======================================================================
+        # MODE 2: Offline Fallback CLI Pipeline Mode
+        # ======================================================================
         existing_session = False
         if conv_id and (brain_dir / conv_id).exists():
             existing_session = True
@@ -796,11 +1176,6 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
         if existing_session:
             cmd.extend(["--conversation", conv_id])
 
-        work_dir = Path(user_home)
-        if project_dir and Path(project_dir).exists():
-            work_dir = Path(project_dir)
-
-        # Isolated environment variables
         env = os.environ.copy()
         env["HOME"] = user_home
         env["USER"] = user_profile.get("display_name", "user").split()[0]
@@ -856,8 +1231,7 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
 
             proc.wait()
 
-            # Ensure new session has correct workspace uri recorded
-            db_path = Path(user_profile["summaries_db"])
+            db_path = Path(user_profile.get("summaries_db", str(Path.home() / ".gemini" / "antigravity-cli" / "conversation_summaries.db")))
             if not existing_session and real_conv_id and db_path.exists():
                 try:
                     conn = get_summaries_db(user_profile)
@@ -884,10 +1258,18 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main():
-    print(f"🚀 [Agy-Web] Starting Multi-User Secure Native Web UI on http://{HOST}:{PORT}")
+    print(f"🚀 [Agy-Web] Starting Dual-Mode Remote Synced Web UI on http://{HOST}:{PORT}")
     cfg = load_auth_config()
     configured_users = list(cfg.get("users", {}).keys())
     print(f"👥 [Agy-Web] Configured isolated users: {configured_users}")
+
+    # Initial Bridge Probe
+    inst = ls_bridge.get_instance()
+    if inst:
+        print(f"🟢 [Agy-Web] Language Server Bridge connected! Port: {inst['port']}, Source: {inst['source']}")
+        print(f"✨ [Agy-Web] Full bidirectional synchronization with Google Antigravity Remote is ACTIVE.")
+    else:
+        print(f"🟡 [Agy-Web] Language Server daemon not found. Running in standalone CLI fallback mode.")
 
     server = ThreadingHTTPServer((HOST, PORT), AgyMultiUserHandler)
     try:

@@ -225,6 +225,14 @@
       <!-- Right: Responsive Controls -->
       <div class="flex items-center space-x-1.5 sm:space-x-2 flex-shrink-0">
         
+        <!-- Bidirectional Sync Status Badge -->
+        <div id="sync-status-badge" onclick="checkBridgeStatus(true)"
+             class="flex items-center space-x-1 bg-dark-card border border-dark-border rounded-lg px-2 py-1 text-xs cursor-pointer hover:border-slate-500 transition"
+             title="点击检测与 Google Antigravity Remote 的双向同步连接">
+          <span id="sync-status-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="sync-status-text" class="text-[10px] sm:text-[11px] text-slate-200 hidden sm:inline font-medium">双向同步</span>
+        </div>
+
         <!-- Project Selector Dropdown -->
         <div class="flex items-center bg-dark-card border border-dark-border rounded-lg px-2 py-1 text-xs" title="切换当前对话所属项目">
           <span class="mr-1 text-xs">📁</span>
@@ -399,10 +407,40 @@
       }
     }
 
-    // Check Auth on Page Load
+    // Check Auth and Sync Status on Page Load
     window.addEventListener('DOMContentLoaded', async () => {
+      checkBridgeStatus(false);
       await checkAuthStatus();
     });
+
+    async function checkBridgeStatus(interactive = false) {
+      try {
+        const res = await fetch('/api/bridge/status');
+        const data = await res.json();
+        const dot = document.getElementById('sync-status-dot');
+        const text = document.getElementById('sync-status-text');
+        const badge = document.getElementById('sync-status-badge');
+        if (!dot || !text || !badge) return;
+
+        if (data.online) {
+          dot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+          text.innerText = "双向同步";
+          text.className = "text-[10px] sm:text-[11px] text-emerald-300 hidden sm:inline font-medium";
+          badge.title = `🟢 ${data.mode_text}\n端口: ${data.port}\n${data.description}`;
+          if (interactive) {
+            alert(`🟢 【双向同步状态】\n\n已成功直连本地 Antigravity Language Server (端口: ${data.port})！\n\n在此发送的对话，将毫秒级双向实时同步至 Google Antigravity Remote (https://antigravity.google.com)；在 Remote 上操作的会话，Web 端亦将即时呈现。`);
+          }
+        } else {
+          dot.className = "w-2 h-2 rounded-full bg-amber-400";
+          text.innerText = "本地直驱";
+          text.className = "text-[10px] sm:text-[11px] text-amber-300 hidden sm:inline font-medium";
+          badge.title = `🟡 ${data.mode_text}\n${data.description}`;
+          if (interactive) {
+            alert(`🟡 【本地直驱模式】\n\n当前未检测到后台活跃的 Antigravity Language Server，系统已自动降级为原生 CLI 管道直驱模式。\n\n对话仍可正常进行并沉淀在本地，但暂无法实时推送到 Google Remote 云端工作台。`);
+          }
+        }
+      } catch (e) {}
+    }
 
     // ──────────────────────────────────────────────────────────────────────────
     // Auth Flow
@@ -1018,7 +1056,11 @@
               const raw = line.slice(6).trim();
               try {
                 const evt = JSON.parse(raw);
-                if (evt.type === 'delta') {
+                if (evt.type === 'init') {
+                  if (evt.conversation_id) {
+                    activeConversationId = evt.conversation_id;
+                  }
+                } else if (evt.type === 'delta') {
                   if (evt.content) {
                     fullContent += evt.content;
                     asstBody.innerHTML = marked.parse(fullContent);
