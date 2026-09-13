@@ -1,0 +1,13 @@
+{
+  "salt": "agy_web_salt_example_please_change",
+  "users": {
+    "shenb": {
+      "password_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "display_name": "用户1",
+      "bin": "/usr/local/bin/agy9328",
+      "home": "/home/your_user",
+      "summaries_db": "/home/your_user/.gemini/antigravity-cli/conversation_summaries.db",
+      "brain_dir": "/home/your_user/.gemini/antigravity-cli/brain"
+    }
+  }
+}

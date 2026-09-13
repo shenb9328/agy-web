@@ -14,12 +14,16 @@
 - **🎯 项目感知与归属自由选择**：
   - 顶栏与新建会话界面提供直观的 **“所属项目” 下拉选择器**；
   - 发起新对话时可自由指定目标项目，对话自动绑定并沉淀到对应项目目录下。
+- **🔒 多用户安全隔离与独立账户环境**：
+  - 支持多用户密码登录（加盐 SHA-256 哈希加密存储于本地硬盘，严禁前端暴露）；
+  - 登录态通过安全 HTTPOnly Cookie 保持；
+  - 不同用户登录后自动映射到各自独立的 CLI 启动程序（如 `agy9328` / `agy93091028`）与专属数据目录，数据互不交叉、配额互不干扰。
 - **⚡ 100% 纯原生 CLI 直驱（零代理架构）**：
   - 彻底摆脱 `agy-proxy` 或任何第三方 API 中转；
   - 后端直接拉起 `/usr/local/bin/agy -p ... --output-format stream-json` 管道，毫秒级流式吐字输出；
   - 原生支持 Gemini 3.8 Flash、Gemini 3.1 Pro、Claude Sonnet 4.6 (Thinking) 等高阶模型。
 - **🔄 双向免同步体系（单一数据源 Single Source of Truth）**：
-  - 历史会话直接读取 `~/.gemini/antigravity-cli/conversation_summaries.db`；
+  - 历史会话直接读取对应用户的 `conversation_summaries.db`；
   - 完整聊天记录与思考链（Thinking Chain）直接解析 `brain/<id>/.../transcript.jsonl`；
   - 在 Web 上的对话立即生效于终端，在终端敲 `agy` 产生的记录 Web 刷新立即可见。
 - **🪶 极致轻量化**：
@@ -37,11 +41,12 @@
 
 ```text
 agy-web/
-├── server.py                 # 原生直驱轻量 Web 后端 (纯 Python 3 标准库)
-├── index.html                # 现代化单页前端 (TailwindCSS + Marked.js + Highlight.js)
+├── server.py                 # 原生直驱多用户轻量 Web 后端 (纯 Python 3 标准库)
+├── index.html                # 现代化单页前端 (含多用户登录弹窗与账户状态栏)
+├── users.example.json        # 账户配置安全模板 (真实 users.json 独立保存并加入 gitignore)
 ├── antigravity-web.service   # Systemd User 守护进程模板
 ├── install.sh                # 一键部署与开机自启安装脚本
-├── .gitignore                # 排除本地数据库与缓存
+├── .gitignore                # 排除本地数据库、用户密码配置与缓存
 └── README.md                 # 项目详细指南
 ```
 

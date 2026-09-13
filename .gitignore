@@ -18,3 +18,7 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Private credentials & user configs
+users.json
+auth.json

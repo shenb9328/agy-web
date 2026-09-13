@@ -114,7 +114,7 @@
           <h1 class="font-bold text-sm tracking-wide text-slate-100">Antigravity Web</h1>
           <div class="flex items-center text-[11px] text-emerald-400 space-x-1">
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>CLI 原生直驱 (实时同源)</span>
+            <span id="active-user-badge">环境就绪</span>
           </div>
         </div>
       </div>
@@ -148,11 +148,11 @@
       <div class="text-center text-xs text-slate-500 py-8">正在读取本地项目与会话树...</div>
     </div>
 
-    <!-- Bottom Quota Status Bar -->
+    <!-- Bottom Status Bar -->
     <div class="border-t border-dark-border bg-dark-card/50 p-3 flex items-center justify-between text-[11px] text-slate-400">
       <div class="flex items-center space-x-1.5">
         <i class="ph-bold ph-clock-counter-clockwise text-emerald-400"></i>
-        <span>按最新时间倒序排列</span>
+        <span>按最新时间倒序</span>
       </div>
       <button onclick="openQuotaModal()" class="text-brand-400 hover:text-brand-300 transition flex items-center space-x-1">
         <i class="ph-bold ph-gauge"></i>
@@ -174,19 +174,19 @@
             Antigravity 对话
           </h2>
           <div id="current-folder-breadcrumb" class="text-[11px] text-slate-400 truncate">
-            📁 默认 CLI 工作区
+            📁 默认工作区
           </div>
         </div>
       </div>
 
-      <!-- Right Controls: Project Selector, Model Selector & Actions -->
+      <!-- Right Controls: Project Selector, Model Selector, User Info & Logout -->
       <div class="flex items-center space-x-2.5 flex-shrink-0">
         <!-- Project Selector Dropdown -->
         <div class="flex items-center space-x-1.5 bg-dark-card border border-dark-border px-2.5 py-1 rounded-lg text-xs" title="选择当前对话所属项目">
           <i class="ph-bold ph-folder text-brand-500"></i>
           <span class="text-slate-400 text-[11px] hidden sm:inline">项目:</span>
-          <select id="project-select" onchange="changeActiveProject(this.value)" class="bg-transparent text-slate-200 focus:outline-none text-xs cursor-pointer font-medium max-w-[130px] sm:max-w-[160px] truncate">
-            <!-- Dynamically populated from treeData.folders -->
+          <select id="project-select" onchange="changeActiveProject(this.value)" class="bg-transparent text-slate-200 focus:outline-none text-xs cursor-pointer font-medium max-w-[120px] sm:max-w-[150px] truncate">
+            <!-- Populated from treeData.folders -->
           </select>
         </div>
 
@@ -203,8 +203,15 @@
           </select>
         </div>
 
-        <button onclick="openQuotaModal()" class="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-dark-hover transition" title="查看配额">
-          <i class="ph-bold ph-gauge text-base"></i>
+        <!-- User Profile Pill -->
+        <div class="hidden sm:flex items-center space-x-1.5 bg-dark-card border border-dark-border px-2.5 py-1 rounded-lg text-xs text-slate-300">
+          <i class="ph-bold ph-user-circle text-brand-400 text-sm"></i>
+          <span id="user-display-name" class="font-medium">账户</span>
+        </div>
+
+        <!-- Logout Button -->
+        <button onclick="handleLogout()" class="p-1.5 text-slate-400 hover:text-red-400 rounded-lg hover:bg-dark-hover transition" title="退出登录">
+          <i class="ph-bold ph-sign-out text-base"></i>
         </button>
       </div>
     </header>
@@ -244,24 +251,64 @@
     </footer>
   </main>
 
+  <!-- Login Modal Overlay (Shown when unauthenticated) -->
+  <div id="login-modal" class="fixed inset-0 bg-dark-bg/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-dark-sidebar border border-dark-border w-full max-w-sm rounded-2xl p-6 shadow-2xl space-y-5">
+      <div class="text-center space-y-2">
+        <div class="w-12 h-12 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-brand-600/30 mx-auto text-2xl text-white">
+          <i class="ph-bold ph-atom"></i>
+        </div>
+        <h2 class="text-lg font-bold text-slate-100">Antigravity Web 登录</h2>
+        <p class="text-xs text-slate-400">请输入你的专属账户凭据访问独立会话环境</p>
+      </div>
+
+      <form id="login-form" onsubmit="submitLogin(event)" class="space-y-3.5">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">用户名</label>
+          <div class="relative">
+            <i class="ph ph-user absolute left-3 top-2.5 text-slate-400 text-sm"></i>
+            <input id="login-username" type="text" required placeholder="例如: shenb 或 sam"
+                   class="w-full bg-dark-bg border border-dark-border rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">密码</label>
+          <div class="relative">
+            <i class="ph ph-lock absolute left-3 top-2.5 text-slate-400 text-sm"></i>
+            <input id="login-password" type="password" required placeholder="请输入密码"
+                   class="w-full bg-dark-bg border border-dark-border rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition">
+          </div>
+        </div>
+
+        <div id="login-error" class="hidden text-xs text-red-400 text-center py-1"></div>
+
+        <button type="submit" id="login-submit-btn"
+                class="w-full bg-brand-600 hover:bg-brand-500 text-white font-medium py-2 rounded-xl text-xs shadow-md shadow-brand-600/25 transition">
+          登 录
+        </button>
+      </form>
+    </div>
+  </div>
+
   <!-- Quota Modal -->
   <div id="quota-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
     <div class="bg-dark-sidebar border border-dark-border w-full max-w-md rounded-xl p-5 shadow-2xl space-y-4">
       <div class="flex items-center justify-between border-b border-dark-border pb-3">
         <div class="flex items-center space-x-2">
           <i class="ph-bold ph-gauge text-brand-500 text-lg"></i>
-          <h3 class="font-bold text-sm text-slate-100">Antigravity 原生模型状态</h3>
+          <h3 class="font-bold text-sm text-slate-100">当前账户原生模型配额</h3>
         </div>
         <button onclick="closeQuotaModal()" class="text-slate-400 hover:text-white"><i class="ph-bold ph-x text-lg"></i></button>
       </div>
       <div id="quota-modal-content" class="space-y-2.5 max-h-80 overflow-y-auto pr-1 text-xs">
         <div class="p-3 rounded bg-dark-bg border border-dark-border space-y-1">
           <div class="font-medium text-slate-200">Gemini 3.8 Flash</div>
-          <div class="text-[11px] text-emerald-400 font-bold">100% 可用 (循环自动刷新)</div>
+          <div class="text-[11px] text-emerald-400 font-bold">100% 可用 (循环自动重置)</div>
         </div>
         <div class="p-3 rounded bg-dark-bg border border-dark-border space-y-1">
           <div class="font-medium text-slate-200">Gemini 3.1 Pro</div>
-          <div class="text-[11px] text-emerald-400 font-bold">95% 可用 (高阶深度推理)</div>
+          <div class="text-[11px] text-emerald-400 font-bold">95% 可用 (深度推演代码)</div>
         </div>
         <div class="p-3 rounded bg-dark-bg border border-dark-border space-y-1">
           <div class="font-medium text-slate-200">Claude Sonnet 4.6</div>
@@ -281,7 +328,8 @@
     let currentModel = 'gemini-3.8-flash';
     let treeData = { folders: [], conversations: [] };
     let isStreaming = false;
-    let folderCollapseState = {}; // Stores collapsed state per folder
+    let folderCollapseState = {};
+    let currentUser = null;
 
     // Configure marked options
     marked.setOptions({
@@ -294,9 +342,9 @@
       breaks: true
     });
 
-    // On Load
+    // Check Auth on Page Load
     window.addEventListener('DOMContentLoaded', async () => {
-      await loadTree(true);
+      await checkAuthStatus();
 
       // Responsive Sidebar Toggle
       document.getElementById('toggle-sidebar')?.addEventListener('click', () => {
@@ -308,23 +356,97 @@
     });
 
     // ──────────────────────────────────────────────────────────────────────────
+    // Auth Flow
+    // ──────────────────────────────────────────────────────────────────────────
+
+    async function checkAuthStatus() {
+      try {
+        const res = await fetch('/api/auth/me');
+        const data = await res.json();
+        if (data.authenticated) {
+          currentUser = data;
+          document.getElementById('login-modal').classList.add('hidden');
+          document.getElementById('user-display-name').innerText = data.display_name || data.username;
+          document.getElementById('active-user-badge').innerText = `已连接: ${data.username}`;
+          await loadTree(true);
+        } else {
+          showLoginModal();
+        }
+      } catch (err) {
+        showLoginModal();
+      }
+    }
+
+    function showLoginModal() {
+      document.getElementById('login-modal').classList.remove('hidden');
+      document.getElementById('login-username').focus();
+    }
+
+    async function submitLogin(e) {
+      e.preventDefault();
+      const u = document.getElementById('login-username').value.trim();
+      const p = document.getElementById('login-password').value.trim();
+      const errBox = document.getElementById('login-error');
+      const btn = document.getElementById('login-submit-btn');
+
+      errBox.classList.add('hidden');
+      btn.innerText = '正在验证...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, password: p })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          document.getElementById('login-modal').classList.add('hidden');
+          document.getElementById('user-display-name').innerText = data.display_name || data.username;
+          document.getElementById('active-user-badge').innerText = `已连接: ${data.username}`;
+          currentUser = data;
+          await loadTree(true);
+        } else {
+          errBox.innerText = data.error || '用户名或密码不正确';
+          errBox.classList.remove('hidden');
+        }
+      } catch (err) {
+        errBox.innerText = '连接服务器失败，请稍后重试';
+        errBox.classList.remove('hidden');
+      } finally {
+        btn.innerText = '登 录';
+        btn.disabled = false;
+      }
+    }
+
+    async function handleLogout() {
+      if (!confirm('确定退出当前账户吗？')) return;
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } catch (e) {}
+      location.reload();
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
     // Tree View & Hierarchy Management
     // ──────────────────────────────────────────────────────────────────────────
 
     async function loadTree(autoSelectFirst = false) {
       try {
         const res = await fetch('/api/tree');
+        if (res.status === 401) {
+          showLoginModal();
+          return;
+        }
         treeData = await res.json();
 
-        // Populate Project Selector in Header
         updateProjectSelector();
-
-        // Render Tree (Folders and conversations are both sorted by time descending)
         renderTree(document.getElementById('search-input')?.value || '');
 
-        // Auto select newest conversation on initial load if none selected
         if (autoSelectFirst && !activeConversationId && treeData.conversations.length > 0) {
           switchConversation(treeData.conversations[0].id);
+        } else if (treeData.conversations.length === 0) {
+          createNewConversation();
         }
       } catch (err) {
         console.error('Failed to load native tree:', err);
@@ -345,7 +467,6 @@
         select.appendChild(opt);
       });
 
-      // Restore or set selection
       if (currentVal && Array.from(select.options).some(o => o.value === currentVal)) {
         select.value = currentVal;
       } else if (treeData.folders.length > 0) {
@@ -360,7 +481,6 @@
       const folder = treeData.folders.find(f => f.id === folderId);
       updateBreadcrumb();
 
-      // If viewing an existing conversation, update its project binding
       if (activeConversationId) {
         fetch(`/api/conversations/${activeConversationId}`, {
           method: 'PUT',
@@ -385,16 +505,13 @@
 
       const query = filterQuery.toLowerCase().trim();
 
-      // Folders are already sorted by latest_time descending from server!
       treeData.folders.forEach((folder, idx) => {
-        // Find conversations belonging to this folder, already sorted by updated_at descending!
         const folderConvs = treeData.conversations.filter(c => c.folder_id === folder.id);
         const matchesFolder = folder.name.toLowerCase().includes(query);
         const matchingConvs = folderConvs.filter(c => c.title.toLowerCase().includes(query));
 
         if (query && !matchesFolder && matchingConvs.length === 0) return;
 
-        // Default: Expand first 2 active folders, collapse others unless toggled
         if (folderCollapseState[folder.id] === undefined) {
           folderCollapseState[folder.id] = (idx < 2) ? false : true;
         }
@@ -424,7 +541,7 @@
         const convsToRender = query ? matchingConvs : folderConvs;
         
         if (convsToRender.length === 0) {
-          childrenContainer.innerHTML = `<div class="text-[11px] text-slate-500 px-3 py-1 italic">暂无会话，点击右上 + 新建</div>`;
+          childrenContainer.innerHTML = `<div class="text-[11px] text-slate-500 px-3 py-1 italic">暂无会话，点击 + 新建</div>`;
         } else {
           convsToRender.forEach(conv => {
             childrenContainer.appendChild(createConvNode(conv));
@@ -442,7 +559,6 @@
         isActive ? 'bg-brand-600/20 text-brand-100 border border-brand-500/40 font-medium shadow-sm' : 'text-slate-400 hover:bg-dark-hover hover:text-slate-200'
       }`;
 
-      // Time formatting (HH:MM or MM-DD)
       let timeStr = '';
       if (conv.updated_at) {
         try {
@@ -497,7 +613,7 @@
     // ──────────────────────────────────────────────────────────────────────────
 
     async function promptCreateProject() {
-      const name = prompt('请输入新项目名称（将在宿主机 ~/ 下创建同名目录）:');
+      const name = prompt('请输入新项目名称（将在该账户主目录下创建同名目录）:');
       if (!name || !name.trim()) return;
       try {
         const res = await fetch('/api/projects', {
@@ -522,21 +638,18 @@
       }
       activeConversationId = null;
 
-      // Update Project Selector
       const select = document.getElementById('project-select');
       if (select && activeFolderId) {
         select.value = activeFolderId;
       }
       updateBreadcrumb();
 
-      // UI state
       document.getElementById('current-chat-title').innerText = '新对话 (输入即发起)';
       renderTree(document.getElementById('search-input')?.value || '');
 
       const folder = treeData.folders.find(f => f.id === activeFolderId);
       const folderName = folder ? folder.name : '默认工作区';
 
-      // Welcome Banner with clear project selection indicator
       const container = document.getElementById('chat-messages');
       container.innerHTML = `
         <div class="text-center py-16 space-y-4 max-w-lg mx-auto">
@@ -553,13 +666,12 @@
               </span>
             </div>
             <div class="text-[11px] text-slate-500">
-              💡 提示：如需归属到其他项目，可随时在<strong>右上角项目下拉框</strong>中直接切换。发送后该对话将直接保存至对应项目目录下。
+              💡 提示：如需归属到其他项目，可随时在<strong>右上角项目下拉框</strong>中直接切换。对话将直接沉淀至该账户对应的项目目录下。
             </div>
           </div>
         </div>
       `;
 
-      // Focus input
       document.getElementById('chat-input').focus();
     }
 
@@ -576,7 +688,6 @@
         updateBreadcrumb();
       }
 
-      // Load Messages directly from transcript.jsonl
       try {
         const res = await fetch(`/api/conversations/${id}`);
         const data = await res.json();
@@ -710,16 +821,13 @@
       input.value = '';
       input.style.height = 'auto';
 
-      // If in empty welcome banner, clear it first
       if (!activeConversationId) {
         document.getElementById('chat-messages').innerHTML = '';
       }
 
-      // Render user message immediately
       appendMessageElement('user', text);
       scrollToBottom();
 
-      // Setup Live Assistant element
       const asstDiv = appendMessageElement('assistant', '', '', true);
       const asstBody = asstDiv.querySelector('#asst-body');
       scrollToBottom();
@@ -742,6 +850,11 @@
             project_dir: folder ? folder.path : null
           })
         });
+
+        if (response.status === 401) {
+          showLoginModal();
+          return;
+        }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -781,7 +894,6 @@
                   if (evt.conversation_id) {
                     activeConversationId = evt.conversation_id;
                   }
-                  // Reload tree so new conversation instantly floats to top of folder
                   await loadTree(false);
                 }
               } catch (e) {}

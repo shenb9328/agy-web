@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Antigravity Web UI (agy-web) Server - Unified Native Direct Storage Engine
-Directly reads and operates on native Antigravity CLI data:
-- Projects & Conversation Summaries from ~/.gemini/antigravity-cli/conversation_summaries.db
-- Full message transcripts from ~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl
-- Direct execution via /usr/local/bin/agy CLI without any proxy or data synchronization lag.
+Antigravity Web UI (agy-web) Server - Multi-User Isolated Edition
+Features:
+- Multi-user authentication with isolated storage and execution environments.
+- Secure, disk-only salted SHA-256 credentials (never exposed to frontend).
+- User 1: shenb (agy9328) -> /home/shenb9328_gmail_com
+- User 2: sam (agy93091028) -> /home/shenb9328_gmail_com/.profiles/agy93091028
+- Full double-time-descending tree view and session isolation.
 """
 
 import os
@@ -13,8 +15,11 @@ import json
 import sqlite3
 import uuid
 import re
-import subprocess
+import time
+import hashlib
 import shutil
+import subprocess
+from http.cookies import SimpleCookie
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
@@ -23,12 +28,14 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 PORT = int(os.environ.get("AGY_WEB_PORT", 8008))
 HOST = os.environ.get("AGY_WEB_HOST", "0.0.0.0")
 BASE_DIR = Path(__file__).resolve().parent
-AGY_DIR = Path.home() / ".gemini" / "antigravity-cli"
-SUMMARIES_DB = AGY_DIR / "conversation_summaries.db"
-BRAIN_DIR = AGY_DIR / "brain"
-AGY_BIN = os.environ.get("AGY_BIN") or shutil.which("agy") or "/usr/local/bin/agy"
 
-# Mapping frontend model options to agy CLI official model names
+# Config paths: prefer ~/.config/agy-web/users.json, fallback to ./users.json
+CONFIG_PATHS = [
+    Path.home() / ".config" / "agy-web" / "users.json",
+    BASE_DIR / "users.json"
+]
+
+# Model mapping
 MODEL_MAP = {
     "gemini-3.8-flash": "Gemini 3.8 Flash (High)",
     "gemini-3.8-flash-high": "Gemini 3.8 Flash (High)",
@@ -41,14 +48,61 @@ MODEL_MAP = {
     "gpt-oss-120b": "GPT-OSS 120B (Medium)"
 }
 
-def get_summaries_db():
-    conn = sqlite3.connect(str(SUMMARIES_DB), check_same_thread=False)
+# In-memory active sessions: token -> {username, login_time, expires_at}
+ACTIVE_SESSIONS = {}
+SESSION_EXPIRY_SECONDS = 30 * 86400  # 30 days
+
+# ──────────────────────────────────────────────────────────────────────────────
+# User & Configuration Manager
+# ──────────────────────────────────────────────────────────────────────────────
+
+def load_auth_config():
+    for p in CONFIG_PATHS:
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"[Agy-Web] Error reading config at {p}: {e}")
+    # Default fallback in-memory definition if file not found yet
+    return {
+        "salt": "agy_web_salt_9328_secure",
+        "users": {}
+    }
+
+def get_user_profile(username):
+    config = load_auth_config()
+    users = config.get("users", {})
+    return users.get(username)
+
+def hash_password(salt, password):
+    return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+def verify_credentials(username, password):
+    config = load_auth_config()
+    salt = config.get("salt", "agy_web_salt_9328_secure")
+    user = config.get("users", {}).get(username)
+    if not user:
+        return False
+    expected_hash = user.get("password_hash")
+    computed_hash = hash_password(salt, password)
+    return computed_hash == expected_hash
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Transcript & Database Parser per User Profile
+# ──────────────────────────────────────────────────────────────────────────────
+
+def get_summaries_db(user_profile):
+    db_path = Path(user_profile["summaries_db"])
+    if not db_path.exists():
+        return None
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
-def parse_transcript_file(session_id):
-    """Parses brain/<session_id>/.system_generated/logs/transcript.jsonl into clean messages."""
-    log_file = BRAIN_DIR / session_id / ".system_generated" / "logs" / "transcript.jsonl"
+def parse_transcript_file(user_profile, session_id):
+    brain_dir = Path(user_profile["brain_dir"])
+    log_file = brain_dir / session_id / ".system_generated" / "logs" / "transcript.jsonl"
     if not log_file.exists():
         return []
 
@@ -64,12 +118,8 @@ def parse_transcript_file(session_id):
                     created_at = entry.get("created_at", "")
 
                     if msg_type == "USER_INPUT":
-                        # Strip system XML tags like <USER_REQUEST>, <ADDITIONAL_METADATA>, etc.
                         match = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", content, re.DOTALL)
-                        if match:
-                            clean = match.group(1).strip()
-                        else:
-                            clean = re.sub(r"<[^>]+>", "", content).strip()
+                        clean = match.group(1).strip() if match else re.sub(r"<[^>]+>", "", content).strip()
                         messages.append({
                             "role": "user",
                             "content": clean if clean else content.strip(),
@@ -77,7 +127,6 @@ def parse_transcript_file(session_id):
                             "created_at": created_at
                         })
                     elif msg_type == "PLANNER_RESPONSE":
-                        # Only keep messages with actual content or thinking
                         if content or thinking:
                             messages.append({
                                 "role": "assistant",
@@ -88,26 +137,29 @@ def parse_transcript_file(session_id):
                 except Exception:
                     continue
     except Exception as e:
-        print(f"[Agy-Web] Error reading transcript for {session_id}: {e}")
+        print(f"[Agy-Web] Error reading transcript: {e}")
 
     return messages
 
 # ──────────────────────────────────────────────────────────────────────────────
-# HTTP Request Handler
+# HTTP Request Handler with Multi-User Session Isolation
 # ──────────────────────────────────────────────────────────────────────────────
 
-class AgyNativeWebHandler(SimpleHTTPRequestHandler):
+class AgyMultiUserHandler(SimpleHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(BASE_DIR), **kwargs)
 
-    def _send_json(self, data, status=200):
+    def _send_json(self, data, status=200, headers=None):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        if headers:
+            for k, v in headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -120,6 +172,36 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
             return json.loads(raw)
         except Exception:
             return {}
+
+    def get_session_user(self):
+        token = None
+        # Check Cookie
+        cookie_header = self.headers.get("Cookie")
+        if cookie_header:
+            cookie = SimpleCookie()
+            cookie.load(cookie_header)
+            if "agy_session" in cookie:
+                token = cookie["agy_session"].value
+
+        # Check Authorization header fallback
+        if not token:
+            auth_h = self.headers.get("Authorization", "")
+            if auth_h.startswith("Bearer "):
+                token = auth_h[7:].strip()
+
+        if not token or token not in ACTIVE_SESSIONS:
+            return None
+
+        sess = ACTIVE_SESSIONS[token]
+        if time.time() > sess["expires_at"]:
+            del ACTIVE_SESSIONS[token]
+            return None
+
+        username = sess["username"]
+        profile = get_user_profile(username)
+        if not profile:
+            return None
+        return username, profile, token
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -136,15 +218,38 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
             self.path = "/index.html"
             return super().do_GET()
 
+        # Public / Auth APIs
+        if path == "/api/auth/me":
+            user_info = self.get_session_user()
+            if not user_info:
+                self._send_json({"authenticated": False}, status=200)
+            else:
+                username, profile, _ = user_info
+                self._send_json({
+                    "authenticated": True,
+                    "username": username,
+                    "display_name": profile.get("display_name", username),
+                    "home": profile.get("home")
+                })
+            return
+
+        # Protected APIs
+        user_info = self.get_session_user()
+        if not user_info:
+            self._send_json({"error": "Unauthorized", "code": "AUTH_REQUIRED"}, status=401)
+            return
+
+        username, profile, _ = user_info
+
         if path == "/api/tree":
-            self.handle_get_native_tree()
+            self.handle_get_tree(profile)
         elif path.startswith("/api/conversations/"):
             conv_id = path.split("/")[-1]
-            self.handle_get_conversation_messages(conv_id)
+            self.handle_get_conversation_messages(profile, conv_id)
         elif path == "/api/models":
             self.handle_get_models()
         elif path == "/api/quota":
-            self.handle_get_quota()
+            self.handle_get_quota(username)
         else:
             super().do_GET()
 
@@ -152,12 +257,30 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        # Login
+        if path == "/api/auth/login":
+            self.handle_login()
+            return
+
+        # Logout
+        if path == "/api/auth/logout":
+            self.handle_logout()
+            return
+
+        # Protected APIs
+        user_info = self.get_session_user()
+        if not user_info:
+            self._send_json({"error": "Unauthorized", "code": "AUTH_REQUIRED"}, status=401)
+            return
+
+        username, profile, _ = user_info
+
         if path == "/api/chat/stream":
-            self.handle_native_chat_stream()
+            self.handle_chat_stream(profile)
         elif path == "/api/conversations":
             self.handle_create_conversation()
         elif path == "/api/projects":
-            self.handle_create_project()
+            self.handle_create_project(profile)
         else:
             self._send_json({"error": "Not Found"}, status=404)
 
@@ -165,9 +288,16 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        user_info = self.get_session_user()
+        if not user_info:
+            self._send_json({"error": "Unauthorized"}, status=401)
+            return
+
+        _, profile, _ = user_info
+
         if path.startswith("/api/conversations/"):
             conv_id = path.split("/")[-1]
-            self.handle_update_conversation(conv_id)
+            self.handle_update_conversation(profile, conv_id)
         else:
             self._send_json({"error": "Not Found"}, status=404)
 
@@ -175,88 +305,153 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        user_info = self.get_session_user()
+        if not user_info:
+            self._send_json({"error": "Unauthorized"}, status=401)
+            return
+
+        _, profile, _ = user_info
+
         if path.startswith("/api/conversations/"):
             conv_id = path.split("/")[-1]
-            self.handle_delete_conversation(conv_id)
+            self.handle_delete_conversation(profile, conv_id)
         else:
             self._send_json({"error": "Not Found"}, status=404)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Native Project & Conversation Tree Handler
+    # Auth Logic
     # ──────────────────────────────────────────────────────────────────────────
 
-    def handle_get_native_tree(self):
-        """Reads directly from ~/.gemini/antigravity-cli/conversation_summaries.db"""
+    def handle_login(self):
+        data = self._read_json()
+        username = data.get("username", "").strip()
+        password = data.get("password", "").strip()
+
+        if not username or not password:
+            self._send_json({"error": "用户名和密码不能为空"}, status=400)
+            return
+
+        if not verify_credentials(username, password):
+            self._send_json({"error": "用户名或密码不正确"}, status=401)
+            return
+
+        profile = get_user_profile(username)
+        token = uuid.uuid4().hex
+        expires_at = time.time() + SESSION_EXPIRY_SECONDS
+
+        ACTIVE_SESSIONS[token] = {
+            "username": username,
+            "login_time": time.time(),
+            "expires_at": expires_at
+        }
+
+        # Issue HTTPOnly Cookie
+        cookie = f"agy_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_EXPIRY_SECONDS}"
+        self._send_json({
+            "success": True,
+            "token": token,
+            "username": username,
+            "display_name": profile.get("display_name", username)
+        }, headers={"Set-Cookie": cookie})
+
+    def handle_logout(self):
+        user_info = self.get_session_user()
+        if user_info:
+            _, _, token = user_info
+            if token in ACTIVE_SESSIONS:
+                del ACTIVE_SESSIONS[token]
+
+        # Expire Cookie
+        cookie = "agy_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+        self._send_json({"success": True}, headers={"Set-Cookie": cookie})
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Project & Conversation Tree Handler (Isolated per user profile)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def handle_get_tree(self, user_profile):
         projects_map = {}
         conversations = []
+        db_path = Path(user_profile["summaries_db"])
 
-        if SUMMARIES_DB.exists():
+        if db_path.exists():
             try:
-                conn = get_summaries_db()
-                query = """
-                    SELECT conversation_id, title, preview, step_count, last_modified_time, 
-                           workspace_uris, project_id, status
-                    FROM conversation_summaries 
-                    WHERE killed = 0
-                    ORDER BY last_modified_time DESC
-                """
-                rows = conn.execute(query).fetchall()
-                conn.close()
+                conn = get_summaries_db(user_profile)
+                if conn:
+                    query = """
+                        SELECT conversation_id, title, preview, step_count, last_modified_time, 
+                               workspace_uris, project_id, status
+                        FROM conversation_summaries 
+                        WHERE killed = 0
+                        ORDER BY last_modified_time DESC
+                    """
+                    rows = conn.execute(query).fetchall()
+                    conn.close()
 
-                for r in rows:
-                    conv_id = r["conversation_id"]
-                    title = r["title"] or "无标题会话"
-                    raw_w = r["workspace_uris"]
-                    raw_p = r["project_id"] or "default-cli-project"
-                    mtime = r["last_modified_time"]
+                    user_home = user_profile.get("home", str(Path.home()))
 
-                    # Resolve human-readable project folder name
-                    proj_id = "default"
-                    proj_name = "默认 CLI 工作区"
-                    proj_dir = str(Path.home())
+                    for r in rows:
+                        conv_id = r["conversation_id"]
+                        title = r["title"] or "无标题会话"
+                        raw_w = r["workspace_uris"]
+                        raw_p = r["project_id"] or "default-cli-project"
+                        mtime = r["last_modified_time"]
 
-                    if raw_w:
-                        try:
-                            uris = json.loads(raw_w)
-                            if uris and isinstance(uris, list) and uris[0]:
-                                clean_path = unquote(uris[0].replace("file://", "")).rstrip("/")
-                                proj_dir = clean_path
-                                proj_name = clean_path.split("/")[-1] if "/" in clean_path else clean_path
-                                proj_id = f"proj-{proj_name}"
-                        except Exception:
-                            pass
-                    elif raw_p == "outside-of-project":
-                        proj_id = "outside"
-                        proj_name = "独立任务/未归类"
-                        proj_dir = str(Path.home())
-                    elif raw_p != "default-cli-project":
-                        proj_id = raw_p
-                        proj_name = raw_p
+                        proj_id = "default"
+                        proj_name = "默认工作区"
+                        proj_dir = user_home
 
-                    # Ensure project node exists
-                    if proj_id not in projects_map:
-                        projects_map[proj_id] = {
-                            "id": proj_id,
-                            "name": proj_name,
-                            "path": proj_dir,
-                            "count": 0,
-                            "latest_time": mtime
-                        }
-                    projects_map[proj_id]["count"] += 1
-                    if mtime > projects_map[proj_id].get("latest_time", ""):
-                        projects_map[proj_id]["latest_time"] = mtime
+                        if raw_w:
+                            try:
+                                uris = json.loads(raw_w)
+                                if uris and isinstance(uris, list) and uris[0]:
+                                    clean_path = unquote(uris[0].replace("file://", "")).rstrip("/")
+                                    proj_dir = clean_path
+                                    proj_name = clean_path.split("/")[-1] if "/" in clean_path else clean_path
+                                    proj_id = f"proj-{proj_name}"
+                            except Exception:
+                                pass
+                        elif raw_p == "outside-of-project":
+                            proj_id = "outside"
+                            proj_name = "独立任务/未归类"
+                            proj_dir = user_home
+                        elif raw_p != "default-cli-project":
+                            proj_id = raw_p
+                            proj_name = raw_p
 
-                    conversations.append({
-                        "id": conv_id,
-                        "folder_id": proj_id,
-                        "title": title,
-                        "preview": r["preview"],
-                        "updated_at": mtime
-                    })
+                        if proj_id not in projects_map:
+                            projects_map[proj_id] = {
+                                "id": proj_id,
+                                "name": proj_name,
+                                "path": proj_dir,
+                                "count": 0,
+                                "latest_time": mtime
+                            }
+                        projects_map[proj_id]["count"] += 1
+                        if mtime > projects_map[proj_id].get("latest_time", ""):
+                            projects_map[proj_id]["latest_time"] = mtime
+
+                        conversations.append({
+                            "id": conv_id,
+                            "folder_id": proj_id,
+                            "title": title,
+                            "preview": r["preview"],
+                            "updated_at": mtime
+                        })
             except Exception as e:
-                print(f"[Agy-Web] Error querying conversation_summaries.db: {e}")
+                print(f"[Agy-Web] Error querying user db: {e}")
 
-        # Convert projects_map to list and sort strictly by latest_time descending (newest on top!)
+        # Ensure default project exists even if 0 conversations
+        if "default" not in projects_map:
+            projects_map["default"] = {
+                "id": "default",
+                "name": "默认工作区",
+                "path": user_profile.get("home", str(Path.home())),
+                "count": 0,
+                "latest_time": "2026-01-01"
+            }
+
+        # Sort projects strictly by latest_time descending
         projects_list = list(projects_map.values())
         projects_list.sort(key=lambda p: p.get("latest_time", ""), reverse=True)
 
@@ -265,19 +460,19 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
             "conversations": conversations
         })
 
-    def handle_get_conversation_messages(self, conv_id):
-        """Reads full message history directly from transcript.jsonl."""
-        messages = parse_transcript_file(conv_id)
-        
-        # Get metadata from conversation_summaries.db
+    def handle_get_conversation_messages(self, user_profile, conv_id):
+        messages = parse_transcript_file(user_profile, conv_id)
         title = "会话详情"
-        if SUMMARIES_DB.exists():
+        db_path = Path(user_profile["summaries_db"])
+
+        if db_path.exists():
             try:
-                conn = get_summaries_db()
-                row = conn.execute("SELECT title FROM conversation_summaries WHERE conversation_id = ?", (conv_id,)).fetchone()
-                conn.close()
-                if row and row["title"]:
-                    title = row["title"]
+                conn = get_summaries_db(user_profile)
+                if conn:
+                    row = conn.execute("SELECT title FROM conversation_summaries WHERE conversation_id = ?", (conv_id,)).fetchone()
+                    conn.close()
+                    if row and row["title"]:
+                        title = row["title"]
             except Exception:
                 pass
 
@@ -289,15 +484,15 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
             "messages": messages
         })
 
-    def handle_create_project(self):
-        """Creates a new project directory on host under ~/ or scratch/."""
+    def handle_create_project(self, user_profile):
         data = self._read_json()
         name = data.get("name", "").strip()
         if not name:
-            self._send_json({"error": "Project name cannot be empty"}, status=400)
+            self._send_json({"error": "项目名称不能为空"}, status=400)
             return
 
-        proj_path = Path.home() / name
+        base_home = Path(user_profile.get("home", str(Path.home())))
+        proj_path = base_home / name
         try:
             proj_path.mkdir(parents=True, exist_ok=True)
             self._send_json({
@@ -309,7 +504,6 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": str(e)}, status=500)
 
     def handle_create_conversation(self):
-        """Initializes a placeholder conversation that will be registered upon first message."""
         data = self._read_json()
         folder_id = data.get("folder_id", "default")
         title = data.get("title", "新会话").strip()
@@ -321,32 +515,36 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
             "is_new": True
         })
 
-    def handle_update_conversation(self, conv_id):
+    def handle_update_conversation(self, user_profile, conv_id):
         data = self._read_json()
         new_title = data.get("title")
         new_proj_path = data.get("project_path")
-        if SUMMARIES_DB.exists():
+        db_path = Path(user_profile["summaries_db"])
+
+        if db_path.exists():
             try:
-                conn = get_summaries_db()
-                with conn:
-                    if new_title:
-                        conn.execute("UPDATE conversation_summaries SET title = ? WHERE conversation_id = ?", (new_title.strip(), conv_id))
-                    if new_proj_path:
-                        uri = f"file://{new_proj_path}"
-                        conn.execute("UPDATE conversation_summaries SET workspace_uris = ? WHERE conversation_id = ?", (json.dumps([uri]), conv_id))
-                conn.close()
+                conn = get_summaries_db(user_profile)
+                if conn:
+                    with conn:
+                        if new_title:
+                            conn.execute("UPDATE conversation_summaries SET title = ? WHERE conversation_id = ?", (new_title.strip(), conv_id))
+                        if new_proj_path:
+                            uri = f"file://{new_proj_path}"
+                            conn.execute("UPDATE conversation_summaries SET workspace_uris = ? WHERE conversation_id = ?", (json.dumps([uri]), conv_id))
+                    conn.close()
             except Exception as e:
                 print(f"[Agy-Web] Error updating conversation: {e}")
         self._send_json({"success": True})
 
-    def handle_delete_conversation(self, conv_id):
-        """Soft-deletes or marks killed in conversation_summaries."""
-        if SUMMARIES_DB.exists():
+    def handle_delete_conversation(self, user_profile, conv_id):
+        db_path = Path(user_profile["summaries_db"])
+        if db_path.exists():
             try:
-                conn = get_summaries_db()
-                with conn:
-                    conn.execute("UPDATE conversation_summaries SET killed = 1 WHERE conversation_id = ?", (conv_id,))
-                conn.close()
+                conn = get_summaries_db(user_profile)
+                if conn:
+                    with conn:
+                        conn.execute("UPDATE conversation_summaries SET killed = 1 WHERE conversation_id = ?", (conv_id,))
+                    conn.close()
             except Exception:
                 pass
         self._send_json({"success": True})
@@ -362,9 +560,9 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
         ]
         self._send_json({"data": models})
 
-    def handle_get_quota(self):
+    def handle_get_quota(self, username):
         self._send_json({
-            "tier": "Antigravity CLI Native Direct",
+            "tier": f"Antigravity CLI ({username})",
             "models": {
                 "Gemini 3.8 Flash": {"remaining_percentage": "100%", "reset_time": "循环自动重置"},
                 "Gemini 3.1 Pro": {"remaining_percentage": "95%", "reset_time": "循环自动重置"},
@@ -373,10 +571,10 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
         })
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Direct agy CLI Execution with Streaming
+    # Direct agy CLI Execution (Isolated per user profile)
     # ──────────────────────────────────────────────────────────────────────────
 
-    def handle_native_chat_stream(self):
+    def handle_chat_stream(self, user_profile):
         data = self._read_json()
         conv_id = data.get("conversation_id")
         user_message = data.get("message", "").strip()
@@ -384,10 +582,13 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
         project_dir = data.get("project_dir")
 
         if not user_message:
-            self._send_json({"error": "Message cannot be empty"}, status=400)
+            self._send_json({"error": "消息内容不能为空"}, status=400)
             return
 
         cli_model = MODEL_MAP.get(requested_model, "Gemini 3.8 Flash (High)")
+        agy_bin = user_profile.get("bin", "/usr/local/bin/agy")
+        user_home = user_profile.get("home", str(Path.home()))
+        brain_dir = Path(user_profile.get("brain_dir", str(Path.home() / ".gemini" / "antigravity-cli" / "brain")))
 
         # Prepare SSE Stream
         self.send_response(200)
@@ -397,14 +598,12 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
-        # Check if this conversation already exists in brain
         existing_session = False
-        if conv_id and (BRAIN_DIR / conv_id).exists():
+        if conv_id and (brain_dir / conv_id).exists():
             existing_session = True
 
-        # Build agy command
         cmd = [
-            AGY_BIN,
+            agy_bin,
             "-p", user_message,
             "--output-format", "stream-json",
             "--dangerously-skip-permissions",
@@ -414,10 +613,14 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
         if existing_session:
             cmd.extend(["--conversation", conv_id])
 
-        # Execution working directory
-        work_dir = Path.home()
+        work_dir = Path(user_home)
         if project_dir and Path(project_dir).exists():
             work_dir = Path(project_dir)
+
+        # Isolated environment variables
+        env = os.environ.copy()
+        env["HOME"] = user_home
+        env["USER"] = user_profile.get("display_name", "user").split()[0]
 
         real_conv_id = conv_id
         full_content = []
@@ -429,10 +632,10 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
-                cwd=str(work_dir)
+                cwd=str(work_dir),
+                env=env
             )
 
-            # Inform frontend init
             init_evt = json.dumps({"type": "init", "conversation_id": conv_id})
             self.wfile.write(f"data: {init_evt}\n\n".encode("utf-8"))
             self.wfile.flush()
@@ -470,24 +673,25 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
 
             proc.wait()
 
-            # Ensure new session is bound to the chosen project directory
-            if not existing_session and real_conv_id and SUMMARIES_DB.exists():
+            # Ensure new session has correct workspace uri recorded
+            db_path = Path(user_profile["summaries_db"])
+            if not existing_session and real_conv_id and db_path.exists():
                 try:
-                    conn = get_summaries_db()
-                    with conn:
-                        uri = f"file://{work_dir}"
-                        conn.execute("UPDATE conversation_summaries SET workspace_uris = ? WHERE conversation_id = ?",
-                                     (json.dumps([uri]), real_conv_id))
-                    conn.close()
+                    conn = get_summaries_db(user_profile)
+                    if conn:
+                        with conn:
+                            uri = f"file://{work_dir}"
+                            conn.execute("UPDATE conversation_summaries SET workspace_uris = ? WHERE conversation_id = ?",
+                                         (json.dumps([uri]), real_conv_id))
+                        conn.close()
                 except Exception as err:
                     print(f"[Agy-Web] Error setting workspace uri: {err}")
         except Exception as e:
-            err_msg = f"\n\n*(调用 agy cli 出错: {str(e)})*"
+            err_msg = f"\n\n*(调用 {agy_bin} 失败: {str(e)})*"
             out_evt = json.dumps({"type": "delta", "content": err_msg, "thinking": ""})
             self.wfile.write(f"data: {out_evt}\n\n".encode("utf-8"))
             self.wfile.flush()
 
-        # Send completion event with actual conversation ID
         done_evt = json.dumps({"type": "done", "conversation_id": real_conv_id})
         self.wfile.write(f"data: {done_evt}\n\n".encode("utf-8"))
         self.wfile.flush()
@@ -497,12 +701,12 @@ class AgyNativeWebHandler(SimpleHTTPRequestHandler):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main():
-    print(f"🚀 [Agy-Web] Starting Native Direct Storage Web UI on http://{HOST}:{PORT}")
-    print(f"📁 [Agy-Web] Reading summaries DB: {SUMMARIES_DB}")
-    print(f"🧠 [Agy-Web] Reading brain transcripts: {BRAIN_DIR}")
-    print(f"⚡ [Agy-Web] Direct binary: {AGY_BIN}")
+    print(f"🚀 [Agy-Web] Starting Multi-User Secure Native Web UI on http://{HOST}:{PORT}")
+    cfg = load_auth_config()
+    configured_users = list(cfg.get("users", {}).keys())
+    print(f"👥 [Agy-Web] Configured isolated users: {configured_users}")
 
-    server = ThreadingHTTPServer((HOST, PORT), AgyNativeWebHandler)
+    server = ThreadingHTTPServer((HOST, PORT), AgyMultiUserHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
