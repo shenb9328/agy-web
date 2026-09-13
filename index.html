@@ -254,6 +254,12 @@
           </select>
         </div>
 
+        <!-- Auto-Approve Toggle -->
+        <label class="flex items-center gap-1.5 bg-dark-card border border-dark-border rounded-lg px-2 py-1 text-xs text-slate-300 cursor-pointer hover:border-slate-500 transition select-none" title="关闭时执行系统命令需手动确认；开启后智能体直接自动执行命令">
+          <input type="checkbox" id="auto-approve-chk" onchange="toggleAutoApprove(this.checked)" class="w-3.5 h-3.5 accent-emerald-500 rounded cursor-pointer">
+          <span class="text-[11px] hidden sm:inline font-medium">⚡ 自动执行</span>
+        </label>
+
         <!-- User Profile Indicator / Logout -->
         <div class="flex items-center space-x-1 bg-dark-card border border-dark-border rounded-lg p-1 text-xs text-slate-300">
           <span id="user-display-name" class="font-medium hidden md:inline px-1 text-[11px]">账户</span>
@@ -1031,7 +1037,8 @@
             conversation_id: activeConversationId,
             message: text,
             model: currentModel,
-            project_dir: folder ? folder.path : null
+            project_dir: folder ? folder.path : null,
+            auto_approve: isAutoApproveEnabled()
           })
         });
 
@@ -1060,6 +1067,9 @@
                   if (evt.conversation_id) {
                     activeConversationId = evt.conversation_id;
                   }
+                } else if (evt.type === 'permission_request') {
+                  renderPermissionCard(asstBody, evt);
+                  scrollToBottom();
                 } else if (evt.type === 'delta') {
                   if (evt.content) {
                     fullContent += evt.content;
@@ -1193,6 +1203,89 @@
       const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
       return text ? String(text).replace(/[&<>"']/g, m => map[m]) : '';
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Interactive Command Permission Card & Auto-Approve
+    // ──────────────────────────────────────────────────────────────────────────
+
+    function isAutoApproveEnabled() {
+      return localStorage.getItem('agy_auto_approve') === '1';
+    }
+
+    function toggleAutoApprove(checked) {
+      localStorage.setItem('agy_auto_approve', checked ? '1' : '0');
+    }
+
+    function renderPermissionCard(container, perm) {
+      const cardId = `perm-card-${perm.step_index}`;
+      if (document.getElementById(cardId)) return;
+
+      const card = document.createElement('div');
+      card.id = cardId;
+      card.className = 'my-3 p-3.5 sm:p-4 bg-slate-900/95 border-2 border-amber-500/70 rounded-xl shadow-2xl backdrop-blur select-text';
+      card.innerHTML = `
+        <div class="flex items-center gap-2 text-amber-400 font-semibold text-xs sm:text-sm mb-2">
+          <svg class="w-4 h-4 sm:w-5 sm:h-5 text-amber-400 animate-pulse flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+          </svg>
+          <span>系统命令执行确认</span>
+        </div>
+        <div class="text-xs text-slate-300 mb-2 font-medium">${escapeHtml(perm.description || '智能体申请在主机执行以下系统命令：')}</div>
+        <pre class="text-xs font-mono bg-black/80 text-emerald-400 p-2.5 rounded-lg border border-slate-700/80 mb-3 overflow-x-auto select-all whitespace-pre-wrap"><code>${escapeHtml(perm.command)}</code></pre>
+        <div class="flex flex-wrap items-center gap-2">
+          <button onclick="respondPermission('${perm.cascade_id}', '${perm.trajectory_id}', ${perm.step_index}, true, 'PERMISSION_SCOPE_ONCE', this)"
+                  class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-medium rounded-lg transition shadow flex items-center gap-1.5 cursor-pointer">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+            允许执行 (本次)
+          </button>
+          <button onclick="respondPermission('${perm.cascade_id}', '${perm.trajectory_id}', ${perm.step_index}, true, 'PERMISSION_SCOPE_CONVERSATION', this)"
+                  class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-medium rounded-lg transition shadow flex items-center gap-1.5 cursor-pointer">
+            ✓ 本会话始终允许
+          </button>
+          <button onclick="respondPermission('${perm.cascade_id}', '${perm.trajectory_id}', ${perm.step_index}, false, 'PERMISSION_SCOPE_ONCE', this)"
+                  class="px-3 py-1.5 bg-slate-700 hover:bg-rose-600 active:scale-95 text-slate-200 hover:text-white text-xs font-medium rounded-lg transition cursor-pointer">
+            ✕ 拒绝执行
+          </button>
+        </div>
+      `;
+      container.appendChild(card);
+    }
+
+    async function respondPermission(cascadeId, trajectoryId, stepIndex, allow, scope, btn) {
+      const card = document.getElementById(`perm-card-${stepIndex}`);
+      if (card) {
+        card.querySelectorAll('button').forEach(b => {
+          b.disabled = true;
+          b.classList.add('opacity-50', 'cursor-not-allowed');
+        });
+        const statusDiv = document.createElement('div');
+        statusDiv.className = 'text-xs text-slate-300 mt-2.5 flex items-center gap-1.5';
+        statusDiv.innerHTML = allow 
+          ? '<span class="text-emerald-400 font-medium">✓ 已确认允许，正在执行命令并继续生成...</span>'
+          : '<span class="text-rose-400 font-medium">✕ 已拒绝该命令，正在通知智能体...</span>';
+        card.appendChild(statusDiv);
+      }
+      try {
+        await fetch('/api/cascade/interact', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cascade_id: cascadeId,
+            trajectory_id: trajectoryId,
+            step_index: stepIndex,
+            allow: allow,
+            scope: scope
+          })
+        });
+      } catch (err) {
+        console.error('Permission interact error:', err);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const chk = document.getElementById('auto-approve-chk');
+      if (chk) chk.checked = isAutoApproveEnabled();
+    });
   </script>
 </body>
 </html>

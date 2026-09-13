@@ -229,6 +229,21 @@ class AntigravityLSBridge:
         }
         return self.call_rpc("SendUserCascadeMessage", payload)
 
+    def handle_user_interaction(self, cascade_id, trajectory_id, step_index, allow=True, scope="PERMISSION_SCOPE_ONCE", deny_message="用户在Web端取消了该操作"):
+        payload = {
+            "cascadeId": str(cascade_id),
+            "interaction": {
+                "trajectoryId": str(trajectory_id),
+                "stepIndex": int(step_index),
+                "permission": {
+                    "allow": bool(allow),
+                    "scope": scope if allow else "PERMISSION_SCOPE_ONCE",
+                    "userDenyInstruction": "" if allow else (deny_message or "用户拒绝了执行")
+                }
+            }
+        }
+        return self.call_rpc("HandleCascadeUserInteraction", payload)
+
     def get_trajectory_steps(self, cascade_id, step_offset=0):
         payload = {
             "cascadeId": cascade_id,
@@ -606,6 +621,8 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
             self.handle_create_conversation()
         elif path == "/api/projects":
             self.handle_create_project(profile)
+        elif path == "/api/cascade/interact":
+            self.handle_cascade_interact()
         else:
             self._send_json({"error": "Not Found"}, status=404)
 
@@ -940,6 +957,29 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
                 pass
         self._send_json({"success": True})
 
+    def handle_cascade_interact(self):
+        body = self._read_json() or {}
+        cascade_id = body.get("cascade_id")
+        trajectory_id = body.get("trajectory_id")
+        step_index = body.get("step_index")
+        allow = body.get("allow", True)
+        scope = body.get("scope", "PERMISSION_SCOPE_ONCE")
+        deny_msg = body.get("deny_message", "用户在Web界面拒绝了此命令")
+
+        if not cascade_id or not trajectory_id or step_index is None:
+            self._send_json({"error": "Missing parameters", "success": False}, status=400)
+            return
+
+        res = ls_bridge.handle_user_interaction(
+            cascade_id=cascade_id,
+            trajectory_id=trajectory_id,
+            step_index=step_index,
+            allow=allow,
+            scope=scope,
+            deny_message=deny_msg
+        )
+        self._send_json({"success": True, "result": res})
+
     def handle_get_models(self):
         models = [
             {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash (High)", "desc": "极速响应，百万上下文"},
@@ -1043,6 +1083,7 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
         user_message = data.get("message", "").strip()
         requested_model = data.get("model", "gemini-3.8-flash")
         project_dir = data.get("project_dir")
+        auto_approve = bool(data.get("auto_approve", False))
 
         if not user_message:
             self._send_json({"error": "消息内容不能为空"}, status=400)
@@ -1197,6 +1238,62 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
                             is_done = True
                             advanced_offset = max(advanced_offset, global_idx + 1)
                             break
+
+                        elif status == "CORTEX_STEP_STATUS_WAITING":
+                            traj_step_info = step.get("metadata", {}).get("sourceTrajectoryStepInfo", {})
+                            tid = traj_step_info.get("trajectoryId") or real_conv_id
+                            s_idx = traj_step_info.get("stepIndex", global_idx)
+
+                            req_inter = step.get("requestedInteraction", {})
+                            cmd = ""
+                            if "permission" in req_inter:
+                                cmd = req_inter["permission"].get("resource", {}).get("target", "")
+                            if not cmd:
+                                cmd = step.get("generic", {}).get("args", {}).get("CommandLine", "")
+                            if not cmd:
+                                tool_call = step.get("metadata", {}).get("toolCall", {})
+                                try:
+                                    args = json.loads(tool_call.get("argumentsJson", "{}"))
+                                    cmd = args.get("CommandLine", "")
+                                except Exception:
+                                    pass
+
+                            desc = req_inter.get("permission", {}).get("actionDescription") or \
+                                   step.get("generic", {}).get("args", {}).get("toolSummary") or \
+                                   step.get("generic", {}).get("args", {}).get("toolAction") or \
+                                   "执行系统命令"
+
+                            if auto_approve:
+                                if global_idx not in step_streamed_lens:
+                                    step_streamed_lens[global_idx] = 1
+                                    out_evt = json.dumps({
+                                        "type": "delta",
+                                        "content": f"\n\n> ⚡ **[自动批准执行]** `{cmd}`\n\n",
+                                        "thinking": ""
+                                    })
+                                    self.wfile.write(f"data: {out_evt}\n\n".encode("utf-8"))
+                                    self.wfile.flush()
+                                    ls_bridge.handle_user_interaction(real_conv_id, tid, s_idx, allow=True)
+                            else:
+                                if global_idx not in step_streamed_lens:
+                                    step_streamed_lens[global_idx] = 1
+                                    perm_evt = json.dumps({
+                                        "type": "permission_request",
+                                        "cascade_id": real_conv_id,
+                                        "trajectory_id": tid,
+                                        "step_index": s_idx,
+                                        "command": cmd or "系统操作",
+                                        "description": desc
+                                    })
+                                    self.wfile.write(f"data: {perm_evt}\n\n".encode("utf-8"))
+                                    self.wfile.flush()
+
+                            # Do not advance past this waiting step; reset empty_polls
+                            empty_polls = 0
+                            continue
+
+                        elif stype in ["CORTEX_STEP_TYPE_GENERIC", "CORTEX_STEP_TYPE_RUN_COMMAND"] and status == "CORTEX_STEP_STATUS_ERROR":
+                            advanced_offset = max(advanced_offset, global_idx + 1)
 
                         elif status in ["CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_SUCCESS"]:
                             advanced_offset = max(advanced_offset, global_idx + 1)
