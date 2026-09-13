@@ -358,6 +358,7 @@
     let currentModel = 'gemini-3.8-flash';
     let treeData = { folders: [], conversations: [] };
     let isStreaming = false;
+    let currentAbortController = null;
     let folderCollapseState = {};
     let currentUser = null;
 
@@ -977,12 +978,14 @@
       document.getElementById('stop-btn').classList.remove('hidden');
 
       let fullContent = '';
+      currentAbortController = new AbortController();
 
       try {
         const folder = treeData.folders.find(f => f.id === activeFolderId);
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: currentAbortController.signal,
           body: JSON.stringify({
             conversation_id: activeConversationId,
             message: text,
@@ -998,8 +1001,9 @@
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
+        let isDone = false;
 
-        while (true) {
+        while (!isDone) {
           const { done, value } = await reader.read();
           if (done) break;
 
@@ -1020,22 +1024,28 @@
                     scrollToBottom();
                   }
                 } else if (evt.type === 'done') {
+                  isDone = true;
                   asstBody.classList.remove('cursor-blink');
                   if (card) card._rawContent = fullContent;
                   attachCodeCopyButtons(asstDiv);
                   if (evt.conversation_id) {
                     activeConversationId = evt.conversation_id;
                   }
-                  await loadTree(false);
+                  loadTree(false);
+                  break;
                 }
               } catch (e) {}
             }
           }
         }
+        try { await reader.cancel(); } catch (e) {}
       } catch (err) {
-        asstBody.innerHTML += `<p class="text-red-400 text-xs mt-2">*(连接中断: ${err.message})*</p>`;
+        if (err.name !== 'AbortError') {
+          asstBody.innerHTML += `<p class="text-red-400 text-xs mt-2">*(连接中断: ${err.message})*</p>`;
+        }
       } finally {
         isStreaming = false;
+        currentAbortController = null;
         asstBody.classList.remove('cursor-blink');
         document.getElementById('send-btn').classList.remove('hidden');
         document.getElementById('stop-btn').classList.add('hidden');
@@ -1043,7 +1053,15 @@
     }
 
     function stopGenerating() {
-      location.reload();
+      if (currentAbortController) {
+        currentAbortController.abort();
+        currentAbortController = null;
+      }
+      isStreaming = false;
+      document.getElementById('send-btn').classList.remove('hidden');
+      document.getElementById('stop-btn').classList.add('hidden');
+      const blinks = document.querySelectorAll('.cursor-blink');
+      blinks.forEach(el => el.classList.remove('cursor-blink'));
     }
 
     function handleKeyDown(e) {
