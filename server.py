@@ -180,35 +180,53 @@ class AntigravityLSBridge:
             "allWorkspaceTrustGranted": True
         }
 
-    def start_cascade(self, workspace_path=None):
+    def resolve_plan_model(self, model_name):
+        if not model_name:
+            return "MODEL_GOOGLE_GEMINI_2_5_FLASH"
+        m = str(model_name).lower().strip()
+        if "pro" in m:
+            return "MODEL_GOOGLE_GEMINI_2_5_PRO"
+        elif "gpt" in m or "oss" in m:
+            return "MODEL_OPENAI_GPT_OSS_120B_MEDIUM"
+        elif "lite" in m:
+            return "MODEL_GOOGLE_GEMINI_2_5_FLASH_LITE"
+        elif "thinking" in m:
+            return "MODEL_GOOGLE_GEMINI_2_5_FLASH_THINKING"
+        else:
+            return "MODEL_GOOGLE_GEMINI_2_5_FLASH"
+
+    def start_cascade(self, workspace_path=None, cascade_id=None):
         payload = {
             "metadata": self.get_metadata(),
             "source": "CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT"
         }
+        if cascade_id:
+            payload["cascadeId"] = str(cascade_id)
         if workspace_path:
             uri = f"file://{workspace_path}"
             payload["workspaceFolderAbsoluteUri"] = uri
             payload["workspaceUris"] = [uri]
 
         res = self.call_rpc("StartCascade", payload)
-        if res and isinstance(res, dict) and "cascadeId" in res:
-            return res["cascadeId"]
+        if res and isinstance(res, dict):
+            if "cascadeId" in res:
+                return res["cascadeId"]
+            elif cascade_id and "already exists" in res.get("message", ""):
+                return cascade_id
         return None
 
     def send_user_message(self, cascade_id, message, model=None):
+        plan_model = self.resolve_plan_model(model)
         payload = {
             "metadata": self.get_metadata(),
             "cascadeId": cascade_id,
             "items": [{"text": message}],
             "cascadeConfig": {
                 "plannerConfig": {
-                    "plannerTypeConfig": {"conversational": {}}
+                    "planModel": plan_model
                 }
             }
         }
-        if model:
-            payload["cascadeConfig"]["plannerConfig"]["requestedModel"] = {"model": model}
-
         return self.call_rpc("SendUserCascadeMessage", payload)
 
     def get_trajectory_steps(self, cascade_id, step_offset=0):
@@ -1058,9 +1076,12 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
             try:
                 real_conv_id = conv_id
                 if not real_conv_id or real_conv_id.startswith("temp-"):
-                    real_conv_id = ls_bridge.start_cascade(str(work_dir))
-                    if not real_conv_id:
-                        real_conv_id = str(uuid.uuid4())
+                    new_cid = str(uuid.uuid4())
+                    real_conv_id = ls_bridge.start_cascade(str(work_dir), cascade_id=new_cid) or new_cid
+                else:
+                    traj_check = ls_bridge.get_trajectory(real_conv_id)
+                    if not traj_check or "trajectory" not in traj_check:
+                        ls_bridge.start_cascade(str(work_dir), cascade_id=real_conv_id)
 
                 # Push init event with actual conversation ID
                 init_evt = json.dumps({"type": "init", "conversation_id": real_conv_id})
@@ -1074,34 +1095,41 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
                     start_offset = len(traj_info.get("trajectory", {}).get("steps", []))
 
                 # Inject message into Language Server memory (instantly syncs to Google Remote!)
-                ls_bridge.send_user_message(real_conv_id, user_message, model=requested_model)
+                chosen_model = requested_model
+                ls_bridge.send_user_message(real_conv_id, user_message, model=chosen_model)
 
                 # Poll for steps and stream response deltas
                 current_offset = start_offset
-                last_streamed_len = 0
+                step_streamed_lens = {}
                 is_done = False
                 poll_start = time.time()
                 empty_polls = 0
+                retried_with_flash = False
 
                 while not is_done and (time.time() - poll_start < 300):
-                    time.sleep(0.3)
+                    time.sleep(0.2)
                     steps_resp = ls_bridge.get_trajectory_steps(real_conv_id, current_offset)
                     if not steps_resp or not isinstance(steps_resp, dict):
                         empty_polls += 1
-                        if empty_polls > 40:  # 12s timeout
+                        if empty_polls > 40:
                             break
                         continue
 
                     steps = steps_resp.get("steps", [])
                     if not steps:
-                        # Check status
+                        empty_polls += 1
                         t_stat = ls_bridge.get_trajectory(real_conv_id)
                         if t_stat and t_stat.get("status") in ["CASCADE_RUN_STATUS_IDLE", "CASCADE_RUN_STATUS_SUCCESS"]:
-                            is_done = True
-                            break
+                            if step_streamed_lens or empty_polls > 6:
+                                is_done = True
+                                break
                         continue
 
-                    for step in steps:
+                    empty_polls = 0
+                    advanced_offset = current_offset
+
+                    for idx_in_batch, step in enumerate(steps):
+                        global_idx = current_offset + idx_in_batch
                         stype = step.get("type")
                         status = step.get("status")
 
@@ -1110,9 +1138,10 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
                             resp_text = pr.get("response") or pr.get("content") or ""
                             thinking_text = pr.get("thinking") or ""
 
-                            if len(resp_text) > last_streamed_len:
-                                delta = resp_text[last_streamed_len:]
-                                last_streamed_len = len(resp_text)
+                            prev_len = step_streamed_lens.get(global_idx, 0)
+                            if len(resp_text) > prev_len:
+                                delta = resp_text[prev_len:]
+                                step_streamed_lens[global_idx] = len(resp_text)
                                 out_evt = json.dumps({"type": "delta", "content": delta, "thinking": thinking_text})
                                 self.wfile.write(f"data: {out_evt}\n\n".encode("utf-8"))
                                 self.wfile.flush()
@@ -1120,20 +1149,59 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
                             if status in ["CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_SUCCESS"]:
                                 if not pr.get("toolCalls"):
                                     is_done = True
+                                advanced_offset = max(advanced_offset, global_idx + 1)
 
                         elif stype in ["CORTEX_STEP_TYPE_RUN_COMMAND", "CORTEX_STEP_TYPE_TOOL"]:
-                            meta = step.get("metadata", {})
-                            action_name = meta.get("toolAction") or step.get("toolName") or "执行工具"
-                            summary = meta.get("toolSummary") or "正在执行系统操作..."
+                            if global_idx not in step_streamed_lens:
+                                meta = step.get("metadata", {})
+                                action_name = meta.get("toolAction") or step.get("toolName") or "执行工具"
+                                summary = meta.get("toolSummary") or "正在执行系统操作..."
+                                out_evt = json.dumps({
+                                    "type": "delta",
+                                    "content": f"\n\n> ⚙️ **[{action_name}]** {summary}\n\n",
+                                    "thinking": ""
+                                })
+                                self.wfile.write(f"data: {out_evt}\n\n".encode("utf-8"))
+                                self.wfile.flush()
+                                step_streamed_lens[global_idx] = 1
+
+                            if status in ["CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_SUCCESS"]:
+                                advanced_offset = max(advanced_offset, global_idx + 1)
+
+                        elif stype == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
+                            err_obj = step.get("errorMessage", {}).get("error", {})
+                            short_err = str(err_obj.get("shortError") or "")
+                            user_err = str(err_obj.get("userErrorMessage") or "")
+
+                            # Auto-retry with Flash if capacity exhausted (503) or unrecognized model key
+                            if not retried_with_flash and chosen_model != "gemini-3.8-flash" and (
+                                "503" in short_err or "capacity" in short_err.lower() or "unknown model" in short_err.lower()
+                            ):
+                                print(f"[Agy-Web] Model error: {short_err}, auto-retrying with Flash...")
+                                retried_with_flash = True
+                                chosen_model = "gemini-3.8-flash"
+                                ls_bridge.send_user_message(real_conv_id, user_message, model=chosen_model)
+                                current_offset = global_idx + 1
+                                advanced_offset = current_offset
+                                break
+
+                            # Report error directly to UI so user isn't kept waiting
+                            err_msg = user_err or short_err or "服务繁忙，请稍后重试"
                             out_evt = json.dumps({
                                 "type": "delta",
-                                "content": f"\n\n> ⚙️ **[{action_name}]** {summary}\n\n",
+                                "content": f"\n\n> ⚠️ **[系统提示]** {err_msg}\n\n",
                                 "thinking": ""
                             })
                             self.wfile.write(f"data: {out_evt}\n\n".encode("utf-8"))
                             self.wfile.flush()
+                            is_done = True
+                            advanced_offset = max(advanced_offset, global_idx + 1)
+                            break
 
-                    current_offset += len(steps)
+                        elif status in ["CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_SUCCESS"]:
+                            advanced_offset = max(advanced_offset, global_idx + 1)
+
+                    current_offset = advanced_offset
 
                 # Ensure workspace URI is updated in DB
                 db_path = Path(user_profile.get("summaries_db", str(Path.home() / ".gemini" / "antigravity-cli" / "conversation_summaries.db")))
