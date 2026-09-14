@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6" />
+      <stop offset="50%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#4338ca" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+  <!-- Background badge -->
+  <rect width="512" height="512" rx="112" fill="url(#grad)" />
+  <!-- Gyroscope / Antigravity Ring and Compass -->
+  <g transform="translate(256, 256) scale(15.5)" filter="url(#glow)">
+    <path fill="#ffffff" d="M0 -10 A10 10 0 1 0 0 10 A10 10 0 0 0 0 -10 Z M1 4.93 V6 A1 1 0 0 1 -1 6 V4.93 A7 7 0 0 1 -4.93 1 H-4 A1 1 0 0 1 -4 -1 H-4.93 A7 7 0 0 1 -1 -4.93 V-4 A1 1 0 0 1 1 -4 V-4.93 A7 7 0 0 1 4.93 -1 H4 A1 1 0 0 1 4 1 H4.93 A7 7 0 0 1 1 4.93 Z" />
+    <!-- Center Core Dot -->
+    <circle cx="0" cy="0" r="2.2" fill="#ffffff" />
+  </g>
+</svg>

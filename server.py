@@ -548,8 +548,31 @@ class AgyMultiUserHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        # Public resources
-        if path in ["/", "/index.html", "/favicon.ico"]:
+        # Public resources (including PWA manifest, service worker, icons)
+        if path in ["/", "/index.html", "/favicon.ico", "/manifest.json", "/sw.js"] or path.startswith("/icons/"):
+            if path == "/sw.js":
+                sw_path = BASE_DIR / "sw.js"
+                if sw_path.exists():
+                    body = sw_path.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Service-Worker-Allowed", "/")
+                    self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+            elif path == "/manifest.json":
+                manifest_path = BASE_DIR / "manifest.json"
+                if manifest_path.exists():
+                    body = manifest_path.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/manifest+json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "public, max-age=3600")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
             super().do_GET()
             return
 

@@ -4,6 +4,23 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Antigravity Web UI</title>
+
+  <!-- PWA & Mobile Web App Meta -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0f1117">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Antigravity">
+  <meta name="application-name" content="Antigravity">
+  <meta name="msapplication-TileColor" content="#0f1117">
+
+  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="512x512" href="/icons/icon-512.png">
+
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -43,6 +60,39 @@
       height: 100dvh;
       overflow: hidden;
       background-color: #0f1117;
+    }
+
+    /* PWA & Mobile Notch / Safe Area Support */
+    :root {
+      --sat: env(safe-area-inset-top, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left, 0px);
+      --sar: env(safe-area-inset-right, 0px);
+    }
+    header.pwa-safe-header {
+      padding-top: var(--sat);
+      height: calc(3rem + var(--sat));
+      padding-left: max(0.75rem, var(--sal));
+      padding-right: max(0.75rem, var(--sar));
+    }
+    @media (min-width: 640px) {
+      header.pwa-safe-header {
+        height: calc(3.5rem + var(--sat));
+        padding-left: max(1rem, var(--sal));
+        padding-right: max(1rem, var(--sar));
+      }
+    }
+    footer.pwa-safe-footer {
+      padding-bottom: max(0.75rem, var(--sab));
+      padding-left: max(0.75rem, var(--sal));
+      padding-right: max(0.75rem, var(--sar));
+    }
+    @media (min-width: 640px) {
+      footer.pwa-safe-footer {
+        padding-bottom: max(1rem, var(--sab));
+        padding-left: max(1rem, var(--sal));
+        padding-right: max(1rem, var(--sar));
+      }
     }
 
     /* Custom Scrollbar */
@@ -193,9 +243,15 @@
         <span>⏱️</span>
         <span>按最新时间排序</span>
       </div>
-      <button onclick="openQuotaModal()" class="text-brand-400 hover:text-brand-300 transition flex items-center space-x-1">
-        <span>配额详情</span>
-      </button>
+      <div class="flex items-center space-x-2">
+        <button id="sidebar-pwa-install-btn" onclick="triggerPwaInstall()" class="text-brand-400 hover:text-brand-300 transition flex items-center space-x-1 font-medium cursor-pointer" title="安装为独立手机App">
+          <span>📱</span>
+          <span>安装App</span>
+        </button>
+        <button onclick="openQuotaModal()" class="text-brand-400 hover:text-brand-300 transition flex items-center space-x-1 cursor-pointer">
+          <span>配额详情</span>
+        </button>
+      </div>
     </div>
   </aside>
 
@@ -203,7 +259,7 @@
   <main class="flex-1 flex flex-col w-full h-full min-w-0 overflow-hidden bg-dark-bg">
     
     <!-- Top Header (Clean, responsive, never overflows) -->
-    <header class="h-12 sm:h-14 border-b border-dark-border px-3 sm:px-4 flex items-center justify-between flex-shrink-0 bg-dark-sidebar/50 backdrop-blur z-10">
+    <header class="pwa-safe-header border-b border-dark-border px-3 sm:px-4 flex items-center justify-between flex-shrink-0 bg-dark-sidebar/50 backdrop-blur z-10">
       
       <!-- Left: Menu Button & Title -->
       <div class="flex items-center space-x-2 min-w-0 flex-1 mr-2">
@@ -260,6 +316,14 @@
           <span class="text-[11px] hidden sm:inline font-medium">⚡ 自动执行</span>
         </label>
 
+        <!-- Install App Button (Hidden by default, shown when installable) -->
+        <button id="pwa-install-btn" onclick="triggerPwaInstall()"
+                class="hidden flex items-center space-x-1 bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white rounded-lg px-2 py-1 text-xs shadow-md transition font-medium cursor-pointer"
+                title="安装为独立手机/桌面应用">
+          <span class="text-xs">📱</span>
+          <span class="text-[11px] hidden sm:inline">安装App</span>
+        </button>
+
         <!-- User Profile Indicator / Logout -->
         <div class="flex items-center space-x-1 bg-dark-card border border-dark-border rounded-lg p-1 text-xs text-slate-300">
           <span id="user-display-name" class="font-medium hidden md:inline px-1 text-[11px]">账户</span>
@@ -279,7 +343,7 @@
     </div>
 
     <!-- Bottom Input Box -->
-    <footer class="p-2.5 sm:p-4 border-t border-dark-border bg-dark-sidebar/40 backdrop-blur flex-shrink-0">
+    <footer class="pwa-safe-footer p-2.5 sm:p-4 border-t border-dark-border bg-dark-sidebar/40 backdrop-blur flex-shrink-0">
       <div class="max-w-4xl mx-auto relative">
         <div class="bg-dark-card border border-dark-border rounded-xl p-2 shadow-lg focus-within:border-brand-500 transition-colors">
           <textarea id="chat-input" rows="2" placeholder="输入问题或任务需求... (Enter 发送)"
@@ -364,6 +428,30 @@
       <div class="pt-2 border-t border-dark-border flex items-center justify-between text-[10px] text-slate-500">
         <span>直连 Google CloudCode API 实时计算</span>
         <button onclick="closeQuotaModal()" class="bg-dark-card hover:bg-dark-hover px-3 py-1 rounded-lg text-xs font-medium border border-dark-border text-slate-200 cursor-pointer">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PWA Install Guide Modal -->
+  <div id="pwa-install-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-dark-sidebar border border-dark-border w-full max-w-sm rounded-2xl p-5 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-dark-border pb-3">
+        <div class="flex items-center space-x-2.5">
+          <img src="/icons/icon-192.png" class="w-8 h-8 rounded-lg shadow-md flex-shrink-0" alt="Antigravity">
+          <div>
+            <h3 class="font-bold text-xs text-slate-100">安装 Antigravity 为应用</h3>
+            <p class="text-[10px] text-slate-400">独立原生窗口 · 全屏沉浸体验</p>
+          </div>
+        </div>
+        <button onclick="closePwaModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-dark-hover cursor-pointer">✕</button>
+      </div>
+
+      <div id="pwa-guide-content" class="space-y-3 text-xs text-slate-300">
+        <!-- Dynamically injected based on platform -->
+      </div>
+
+      <div class="pt-2 border-t border-dark-border flex justify-end">
+        <button onclick="closePwaModal()" class="bg-dark-card hover:bg-dark-hover px-3 py-1 rounded-lg text-xs font-medium border border-dark-border text-slate-200 cursor-pointer">我知道了</button>
       </div>
     </div>
   </div>
@@ -1282,9 +1370,146 @@
       }
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // PWA (Progressive Web App) Support
+    // ──────────────────────────────────────────────────────────────────────────
+    let deferredInstallPrompt = null;
+
+    function isRunningStandalone() {
+      return (window.matchMedia('(display-mode: standalone)').matches) ||
+             (window.navigator.standalone === true);
+    }
+
+    function checkPwaInstallState() {
+      const isStandalone = isRunningStandalone();
+      const pwaBtn = document.getElementById('pwa-install-btn');
+      const sidebarPwaBtn = document.getElementById('sidebar-pwa-install-btn');
+
+      if (isStandalone) {
+        if (pwaBtn) pwaBtn.classList.add('hidden');
+        if (sidebarPwaBtn) {
+          sidebarPwaBtn.innerHTML = '<span>📱</span><span class="text-emerald-400">已安装App</span>';
+          sidebarPwaBtn.onclick = () => openPwaModal(true);
+        }
+      } else {
+        if (sidebarPwaBtn) sidebarPwaBtn.classList.remove('hidden');
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+        if (isMobile && pwaBtn) {
+          pwaBtn.classList.remove('hidden');
+        }
+      }
+    }
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredInstallPrompt = e;
+      const pwaBtn = document.getElementById('pwa-install-btn');
+      if (pwaBtn && !isRunningStandalone()) {
+        pwaBtn.classList.remove('hidden');
+      }
+    });
+
+    window.addEventListener('appinstalled', () => {
+      deferredInstallPrompt = null;
+      checkPwaInstallState();
+    });
+
+    async function triggerPwaInstall() {
+      if (deferredInstallPrompt) {
+        deferredInstallPrompt.prompt();
+        const { outcome } = await deferredInstallPrompt.userChoice;
+        if (outcome === 'accepted') {
+          deferredInstallPrompt = null;
+          const pwaBtn = document.getElementById('pwa-install-btn');
+          if (pwaBtn) pwaBtn.classList.add('hidden');
+        }
+      } else {
+        openPwaModal(isRunningStandalone());
+      }
+    }
+
+    function openPwaModal(alreadyInstalled = false) {
+      const modal = document.getElementById('pwa-install-modal');
+      const content = document.getElementById('pwa-guide-content');
+      if (!modal || !content) return;
+
+      if (alreadyInstalled) {
+        content.innerHTML = `
+          <div class="p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-emerald-300 space-y-1">
+            <div class="font-semibold text-xs flex items-center gap-1.5">
+              <span>✓</span> 当前已在独立应用模式下运行
+            </div>
+            <div class="text-[11px] text-slate-300">
+              Antigravity 正在享受完整的主机沙盒与全屏原生交互支持。
+            </div>
+          </div>
+        `;
+      } else {
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+        if (isIOS) {
+          content.innerHTML = `
+            <div class="space-y-2.5">
+              <div class="text-xs text-slate-200 font-medium">在 iPhone / iPad Safari 中安装：</div>
+              <div class="flex items-start space-x-2.5 p-2.5 bg-dark-card border border-dark-border rounded-xl">
+                <span class="w-5 h-5 rounded-full bg-brand-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">1</span>
+                <div>点击 Safari 底部工具栏的 <strong>「分享」</strong> 按钮（带向上箭头的方框图标）。</div>
+              </div>
+              <div class="flex items-start space-x-2.5 p-2.5 bg-dark-card border border-dark-border rounded-xl">
+                <span class="w-5 h-5 rounded-full bg-brand-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">2</span>
+                <div>在弹出菜单中向下滑动，找到并点击 <strong>「添加到主屏幕」</strong>。</div>
+              </div>
+              <div class="flex items-start space-x-2.5 p-2.5 bg-dark-card border border-dark-border rounded-xl">
+                <span class="w-5 h-5 rounded-full bg-brand-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">3</span>
+                <div>点击右上角 <strong>「添加」</strong>，即可在主屏幕像原生 App 一样全屏打开！</div>
+              </div>
+            </div>
+          `;
+        } else {
+          content.innerHTML = `
+            <div class="space-y-2.5">
+              <div class="text-xs text-slate-200 font-medium">在 Android / 手机浏览器中安装：</div>
+              <div class="flex items-start space-x-2.5 p-2.5 bg-dark-card border border-dark-border rounded-xl">
+                <span class="w-5 h-5 rounded-full bg-brand-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">1</span>
+                <div>点击浏览器右上角或底部的菜单 <strong>「⋮」</strong> 或设置选项。</div>
+              </div>
+              <div class="flex items-start space-x-2.5 p-2.5 bg-dark-card border border-dark-border rounded-xl">
+                <span class="w-5 h-5 rounded-full bg-brand-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">2</span>
+                <div>选择 <strong>「安装应用」</strong> 或 <strong>「添加到主屏幕」</strong>。</div>
+              </div>
+              <div class="flex items-start space-x-2.5 p-2.5 bg-dark-card border border-dark-border rounded-xl">
+                <span class="w-5 h-5 rounded-full bg-brand-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">3</span>
+                <div>确认添加后，桌面将生成独立应用图标，拥有专属全屏窗口与沉浸体验。</div>
+              </div>
+            </div>
+          `;
+        }
+      }
+
+      modal.classList.remove('hidden');
+    }
+
+    function closePwaModal() {
+      const modal = document.getElementById('pwa-install-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    // Register Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((reg) => {
+            console.log('[PWA] ServiceWorker registered with scope:', reg.scope);
+          })
+          .catch((err) => {
+            console.warn('[PWA] ServiceWorker registration failed:', err);
+          });
+      });
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
       const chk = document.getElementById('auto-approve-chk');
       if (chk) chk.checked = isAutoApproveEnabled();
+      checkPwaInstallState();
     });
   </script>
 </body>
